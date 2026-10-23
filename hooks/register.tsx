@@ -2120,7 +2120,7 @@ export const register: Register = (on, options) => {
               <Text bold wrap="truncate-start">{name}</Text>
             )}
           </Box>
-          {status ? <Text color={theme.muted}>{` ${status}`}</Text> : null}
+          {status ? <Box flexShrink={0}><Text color={theme.muted}>{` ${status}`}</Text></Box> : null}
           {peeked?.note && peeked.text && !pic ? <Text color={theme.muted}>{' · partial'}</Text> : null}
         </Box>
       )
