@@ -1516,11 +1516,11 @@ export const register: Register = (on, options) => {
       const win = p?.diff ? diffWindow(p.diff, start, previewRows) : previewLines(p?.text ?? '', start, previewRows, markdown)
       previewLine = win.top + 1
       const name = t.preview !== t.root && inside(t.root, t.preview) ? relative(t.root, t.preview) : shortPath(t.preview)
-      const external = { id: 'external', label: unicode ? '↗' : '\u{f08e}', dim: true, hint: 'open in default app' }
+      const external = { id: 'external', label: unicode ? '↗' : '\u{eb14}', dim: true, hint: 'open in default app' }
       return (
         <Box flexDirection="column" minHeight={Math.max(1, e.props.scroll?.bodyRows ?? 1)} backgroundColor={theme.bg || undefined}>
           <Box flexDirection="row">
-            <Button key="back" plain hotkey="h" autoFocus={editWithSetting || inTmux || inHerdr ? undefined : true} label={unicode ? '← files' : '\u{f004d} files'} onPress={() => void closePreview($)} />
+            <Button key="back" plain hotkey="h" autoFocus={editWithSetting || inTmux || inHerdr ? undefined : true} label={unicode ? '← files' : '\u{ea9b} files'} onPress={() => void closePreview($)} />
             <Text> </Text>
             <Box flexShrink={1} flexGrow={1}>
               <Text bold wrap="truncate-start">{name}</Text>
@@ -1529,13 +1529,13 @@ export const register: Register = (on, options) => {
             {button(external)}
           </Box>
           <Box flexDirection="row" gap={2}>
-            {([['j', '↓', '\u{f0045}', 1], ['k', '↑', '\u{f005d}', -1], ['f', 'page ↓', '\u{f0045} page', previewRows - 2], ['b', 'page ↑', '\u{f005d} page', 2 - previewRows]] as const).map(([k, plain, nerd, by]) => {
+            {([['j', '↓', '\u{ea9a}', 1], ['k', '↑', '\u{eaa1}', -1], ['f', 'page ↓', '\u{ea9a} page', previewRows - 2], ['b', 'page ↑', '\u{eaa1} page', 2 - previewRows]] as const).map(([k, plain, nerd, by]) => {
               const step = p?.diff && (k === 'j' || k === 'k') ? (p.diff.some(l => l.kind === '@') ? 'file' : 'hunk') : ''
               const label = step ? `${unicode ? plain : nerd} ${step}` : unicode ? plain : nerd
               return <Button key={`pv-${k}`} plain dimColor hotkey={k} label={label} onPress={() => void (step ? jumpDiff($, by > 0 ? 1 : -1) : scrollPreview($, by)).then(() => parkPreview($))} />
             })}
             <Button key="pv-d" plain dimColor hotkey="d" label={p?.diff ? (t.nodes.find(n => n.id === t.preview)?.kind === 'dir' ? 'tree' : 'file') : 'diff'} onPress={() => void diffFile($, t.preview)} />
-            {editWithSetting || inTmux || inHerdr ? <Button key="edit" plain dimColor autoFocus hotkey="e" label={`${unicode ? 'edit' : '\u{f03eb} edit'} :${previewLine}`} onPress={() => void editPreview($, t.preview)} /> : null}
+            {editWithSetting || inTmux || inHerdr ? <Button key="edit" plain dimColor autoFocus hotkey="e" label={`${unicode ? 'edit' : '\u{ea73} edit'} :${previewLine}`} onPress={() => void editPreview($, t.preview)} /> : null}
           </Box>
           {p?.note ? <Text dimColor={!light} color={light ? theme.muted : undefined}>{p.note}</Text> : null}
           <Client
@@ -1588,13 +1588,13 @@ export const register: Register = (on, options) => {
     }
     const rootCounts = t.top ? countSegs(t.counts[t.root]) : []
     const buttons = [
-      { id: 'up', label: unicode ? '↑' : '\u{f005d}', dim: true, hint: 'parent folder' },
-      { id: 'cwd', label: unicode ? '⌂' : '\u{f02dc}', dim: !follow, hint: 'follow the cwd' },
-      { id: 'refresh', label: unicode ? '↻' : '\u{f0450}', dim: true, hint: 'reload tree and git' },
-      { id: 'hidden', label: unicode ? (t.showHidden ? '◉' : '○') : t.showHidden ? '\u{f0208}' : '\u{f0209}', dim: !t.showHidden, hint: t.showHidden ? 'hide hidden files' : 'show hidden files' },
-      { id: 'size', label: unicode ? 'Σ' : '\u{f02ca}', dim: !t.showSize, hint: t.showSize ? 'show dates' : 'show sizes' },
+      { id: 'up', label: unicode ? '↑' : '\u{ebff}', dim: true, hint: 'parent folder' },
+      { id: 'cwd', label: unicode ? '⊙' : '\u{eb06}', dim: !follow, hint: 'follow the cwd' },
+      { id: 'refresh', label: unicode ? '⟳' : '\u{eb37}', dim: true, hint: 'reload tree and git' },
+      { id: 'hidden', label: unicode ? (t.showHidden ? '◉' : '○') : '\u{eae7}', dim: !t.showHidden, hint: t.showHidden ? 'hide hidden files' : 'show hidden files' },
+      { id: 'size', label: unicode ? 'Σ' : '\u{ea90}', dim: !t.showSize, hint: t.showSize ? 'show dates' : 'show sizes' },
       { id: 'collapse', label: unicode ? '⊟' : '\u{eac5}', dim: true, hint: 'collapse all' },
-      ...(t.selected ? [{ id: 'unselect', label: unicode ? '⊘' : '\u{f0777}', dim: false, hint: 'clear selection' }] : []),
+      ...(t.selected ? [{ id: 'unselect', label: unicode ? '⊘' : '\u{eabd}', dim: false, hint: 'clear selection' }] : []),
     ]
     const header = t.top ? [t.top.split('/').pop() ?? t.top, t.prefix.replace(/\/$/, '')].filter(Boolean).join('/') : t.root.split('/').pop() || t.root
 
@@ -1749,16 +1749,16 @@ export const register: Register = (on, options) => {
               onSubmit={(v: string) => void jump($, v).then(() => $.clock.after(100, park))}
             />
           </Box>
-          {t.query ? <Button key="clear" plain dimColor label={unicode ? '×' : '\u{f0156}'} onPress={() => void search($, '')} /> : null}
+          {t.query ? <Button key="clear" plain dimColor label={unicode ? '×' : '\u{ea76}'} onPress={() => void search($, '')} /> : null}
         </Box>
         {searchGap ? <Text key="gap-below"> </Text> : null}
         {showShortcuts ? (
         <Box flexDirection="row" gap={2}>
-          {([['j', '↓', '\u{f0045}'], ['k', '↑', '\u{f005d}'], ['h', '←', '\u{f004d}'], ['l', '→', '\u{f0054}']] as const).map(([k, plain, nerd]) => (
+          {([['j', '↓', '\u{ea9a}'], ['k', '↑', '\u{eaa1}'], ['h', '←', '\u{ea9b}'], ['l', '→', '\u{ea9c}']] as const).map(([k, plain, nerd]) => (
             <Button key={`nav-${k}`} plain dimColor hotkey={k} label={unicode ? plain : nerd} onPress={() => void navigate($, k).then(park)} />
           ))}
-          <Button key="nav-o" plain dimColor autoFocus hotkey="o" label={unicode ? 'open' : '\u{f03cb} open'} onPress={() => void navigate($, 'return')} />
-          <Button key="nav-s" plain dimColor hotkey="s" label={unicode ? 'search' : '\u{f0349} search'} onPress={() => void $.ui.focus({ requestId: PANE, key: 'q' })} />
+          <Button key="nav-o" plain dimColor autoFocus hotkey="o" label={unicode ? 'open' : '\u{ea94} open'} onPress={() => void navigate($, 'return')} />
+          <Button key="nav-s" plain dimColor hotkey="s" label={unicode ? 'search' : '\u{ea6d} search'} onPress={() => void $.ui.focus({ requestId: PANE, key: 'q' })} />
         </Box>
         ) : null}
         <Client
