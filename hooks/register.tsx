@@ -7,7 +7,7 @@ import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
 import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
-import { draw, layout, parseDu, REST, type Tile, type Usage } from './treemap'
+import { draw, gray, layout, mix, parseDu, REST, type Tile, type Usage } from './treemap'
 import { ADD_COLOR, DEL_COLOR, LIGHT_ADD_COLOR, LIGHT_DEL_COLOR, LIGHT_HOVER, type Palette, parsePalette } from './palette'
 import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR, LIGHT_GIT_COLOR } from './icons'
 import {
@@ -93,6 +93,7 @@ let diffWithSetting = ''
 let palette: Palette = parsePalette('')
 let inTmux = false
 let inHerdr = false
+let coarse = false
 let previewLine = 1
 let previewed: Preview | null = null
 let previewRows = 20
@@ -152,6 +153,9 @@ const scans = new Map<string, Scan>()
 let mapLock: { anchor: string; pick: string; cursor: string } | null = null
 let mapAnchor = ''
 const SCAN_KEEP = 24
+const STALE_MS = 1500
+const staleQueue = new Set<string>()
+let staleTimer: Timer | null = null
 type PictureJob = { path: string; kind: 'png' | 'image' | 'video'; sig: string; mtime: number; size: number }
 type Picture = { state: 'pending' } | { state: 'ready'; file: string; generation: number; width: number; height: number } | { state: 'failed'; note: string }
 
@@ -839,7 +843,7 @@ function scheduleScan($: EngineInterface, job: Job): void {
 async function touched($: EngineInterface, paths: string[], tone: string, show: boolean): Promise<void> {
   if (tone !== 'purple' && previewed && paths.map(posix).includes(previewed.path)) previewed = null
   if (tone !== 'purple' && peeked && paths.map(posix).includes(peeked.path)) peeked = null
-  if (tone !== 'purple') for (const scan of scans.values()) if (paths.some(p => inside(scan.dir, posix(p)))) scan.stale = true
+  if (tone !== 'purple') markStale($, paths)
   if (await followCwd($)) return
   const t = await get($)
   if (!t.root) return
@@ -1162,7 +1166,7 @@ function usageOf($: EngineInterface, dir: string): Scan {
 }
 
 async function runScan($: EngineInterface, scan: Scan, seeded: boolean): Promise<void> {
-  const out: Usage[] = seeded ? [] : scan.items
+  let out: Usage[] = seeded ? [] : scan.items
   let total = 0
   try {
     if ((await osName($)) === 'win32') {
@@ -1173,23 +1177,24 @@ async function runScan($: EngineInterface, scan: Scan, seeded: boolean): Promise
         if (!seeded) void $.ui.invalidate('ui.render')
       }
     } else {
-      const stream = $.process.spawn({ argv: ['du', '-akxH', '-d', '1', '--', scan.dir] })
+      const stream = $.process.spawn({ argv: ['du', '-akxH', '-d', '2', '--', scan.dir] })
       scan.stop = () => void stream.return(undefined as never).catch(() => undefined)
-      let rest = ''
+      let text = ''
       for await (const chunk of stream) {
         if (scan.stopped) return
         if (chunk.stream !== 'stdout') continue
-        const lines = (rest + chunk.text).split('\n')
-        rest = lines.pop() ?? ''
-        const got = parseDu(lines.join('\n'), scan.dir)
-        out.push(...got.items)
-        if (got.total !== undefined) total = got.total
-        if (got.items.length && !seeded) void $.ui.invalidate('ui.render')
+        text += chunk.text
+        const got = parseDu(text.slice(0, text.lastIndexOf('\n') + 1), scan.dir)
+        out = got.items
+        if (!seeded) {
+          scan.items = out
+          void $.ui.invalidate('ui.render')
+        }
       }
       if (scan.stopped) return
-      const last = parseDu(rest, scan.dir)
-      out.push(...last.items)
-      if (last.total !== undefined) total = last.total
+      const got = parseDu(text, scan.dir)
+      out = got.items
+      total = got.total ?? 0
     }
   } catch {
     if (scan.stopped) return
@@ -1200,8 +1205,31 @@ async function runScan($: EngineInterface, scan: Scan, seeded: boolean): Promise
   void $.ui.invalidate('ui.render')
 }
 
+async function mapUp($: EngineInterface, anchor: string): Promise<void> {
+  const t = await get($)
+  mapLock = { anchor: dirname(anchor), pick: anchor, cursor: t.cursor }
+  void $.ui.invalidate('ui.render')
+}
+
+function markStale($: EngineInterface, paths: string[]): void {
+  for (const p of paths) staleQueue.add(posix(p))
+  if (staleTimer) return
+  staleTimer = $.clock.after(STALE_MS, () => {
+    staleTimer = null
+    const hit = [...staleQueue]
+    staleQueue.clear()
+    let any = false
+    for (const scan of scans.values()) {
+      if (!hit.some(p => inside(scan.dir, p))) continue
+      scan.stale = true
+      any = true
+    }
+    if (any) void $.ui.invalidate('ui.render')
+  })
+}
+
 async function pickTile($: EngineInterface, id: string): Promise<void> {
-  if (id === REST) return
+  if (id.startsWith(REST)) return
   const t = await get($)
   const node = t.nodes.find(n => n.id === id)
   if (mapLock?.pick === id) {
@@ -1472,6 +1500,8 @@ export const register: Register = (on, options) => {
     useDrives(windows)
     inTmux = !windows && Boolean(await $.env.get('TMUX'))
     inHerdr = !windows && Boolean(await $.env.get('HERDR_ENV'))
+    const colorterm = ((await $.env.get('COLORTERM')) ?? '').toLowerCase()
+    coarse = !windows && ((inTmux && !(await $.env.get('CLAUDE_CODE_TMUX_TRUECOLOR'))) || (colorterm !== 'truecolor' && colorterm !== '24bit'))
     pictureSession = (await $.session.id()).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'session'
     pictureBase = ((await $.env.get('XDG_RUNTIME_DIR')) || (await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '') || '/'
     home = posix(((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/[\\/]+$/, ''))
@@ -2016,16 +2046,22 @@ export const register: Register = (on, options) => {
         const total = scan.done ? scan.total : scan.items.reduce((a, u) => a + u.bytes, 0)
         const lit = t.flashOn ? t.flash : []
         const pick = tiles.find(x => x.path === lock?.pick)
+        const ground = theme.bg || (light ? '#ffffff' : '#1e1e2e')
+        const pct = (bytes: number) => `${total ? Math.max(bytes ? 1 : 0, Math.round((bytes / total) * 100)) : 0}%`
         const look = (tile: Tile) => {
           const hot = lit.find(f => inside(tile.path, f))
           const tone = hot ? (tones[t.flashTones[hot] ?? 'orange']?.solid ?? theme.accent) : ''
           const picked = tile === pick
-          const dim = tile.path === REST || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
-          return { border: tone || (picked ? theme.accent : theme.muted), name: tone || (dim ? theme.muted : theme.fg), size: tone || (picked ? theme.fg : theme.muted), bold: picked || Boolean(tone), ...(picked ? { bg: theme.selection } : {}), rank: picked ? 2 : tone ? 1 : 0 }
+          const dim = tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
+          const share = total ? tile.bytes / total : 0
+          const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
+          const bg = picked ? (coarse ? gray(ground, 9) : mix(ground, theme.accent, 0.5)) : tone ? (coarse ? tone : mix(ground, tone, 0.4)) : coarse ? gray(ground, level + 1) : mix(ground, theme.accent, 0.04 + 0.08 * level)
+          const ink = tone && coarse ? ground : theme.fg || (light ? '#000000' : '#ffffff')
+          return { border: tone || (picked ? theme.accent : theme.muted), name: dim && !tone && !picked ? theme.muted : ink, size: ink, bold: picked || Boolean(tone) || tile.depth === 0, bg, rank: picked ? 2 : tone ? 1 : 0 }
         }
-        status = pick ? `${pick.name} ${formatSize(pick.bytes)} ${total ? Math.round((pick.bytes / total) * 100) : 0}%` : `${formatSize(total)}${scan.done ? '' : ' …'}`
+        status = pick ? `${pick.name} ${formatSize(pick.bytes)} ${pct(pick.bytes)}` : `${formatSize(total)}${scan.done ? '' : ' …'}`
         content = tiles.length
-          ? <Client key="treemap" module="./rows.tsx" props={{ rows: draw(tiles, cols, peekRows, look, x => formatSize(x.bytes)), active: '', ...rowColors, pointer } satisfies RowsProps} />
+          ? <Client key="treemap" module="./rows.tsx" props={{ rows: draw(tiles, cols, peekRows, look, x => `${formatSize(x.bytes)} ${pct(x.bytes)}`), active: '', ...rowColors, pointer } satisfies RowsProps} />
           : <Text color={theme.muted}>{scan.done ? 'empty' : 'sizing…'}</Text>
       } else if (!target) content = <Text color={theme.muted}>no file selected</Text>
       else if (pic) {
@@ -2052,7 +2088,11 @@ export const register: Register = (on, options) => {
       const title = (
         <Box key="peek-title" flexDirection="row" height={1} overflow="hidden">
           <Box flexShrink={1} flexGrow={1} overflow="hidden">
-            <Text bold wrap="truncate-start">{name}</Text>
+            {anchor && anchor !== t.root && !target ? (
+              <Button key="map-up" plain label={`${glyphSetting === 'text' ? 'up ' : unicode ? '↑ ' : '\u{eaa1} '}${name}`} onPress={() => void mapUp($, anchor)} />
+            ) : (
+              <Text bold wrap="truncate-start">{name}</Text>
+            )}
           </Box>
           {status ? <Text color={theme.muted}>{` ${status}`}</Text> : null}
           {peeked?.note && peeked.text && !pic ? <Text color={theme.muted}>{' · partial'}</Text> : null}

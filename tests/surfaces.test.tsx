@@ -2049,7 +2049,7 @@ test('treemap: a folder under the cursor maps its children by du size, a click s
     os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', status: '', numstat: '',
     dirs: { [root]: [['src', 'dir'], ['big.bin', 'file'], ['a.ts', 'file']], [`${root}/src`]: [['x.ts', 'file'], ['y.ts', 'file']] },
     du: {
-      [root]: `6144\t${root}/src\n3072\t${root}/big.bin\n4\t${root}/a.ts\n9220\t${root}\n`,
+      [root]: `5120\t${root}/src/x.ts\n1024\t${root}/src/y.ts\n6144\t${root}/src\n3072\t${root}/big.bin\n4\t${root}/a.ts\n9220\t${root}\n`,
       [`${root}/src`]: `5120\t${root}/src/x.ts\n1024\t${root}/src/y.ts\n6144\t${root}/src\n`,
     },
   }, ran)
@@ -2059,13 +2059,14 @@ test('treemap: a folder under the cursor maps its children by du size, a click s
   await clock.settle()
   await ui.press({ key: 'split' })
   await clock.settle()
-  expect(ran).toContainEqual(['du', '-akxH', '-d', '1', '--', root])
+  expect(ran).toContainEqual(['du', '-akxH', '-d', '2', '--', root])
   let map = mapOf(await ui.drawn())
   const text = (m: any) => m.rows.map((r: any) => r.left.map((s: any) => s.t).join('')).join('\n')
   expect(text(map)).toContain('src')
   expect(text(map)).toContain('6.0 M')
   expect(text(map)).toContain('big.bin')
   expect(text(map)).toContain('╭')
+  expect(text(map)).toContain('x.ts 5.0 M 56%')
   expect(JSON.stringify(await ui.drawn())).toContain('9.0 M')
   await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
   await clock.settle()
@@ -2074,10 +2075,10 @@ test('treemap: a folder under the cursor maps its children by du size, a click s
   expect(mapOf(await ui.drawn())).toBeDefined()
   expect(drawn).toContain(`"active":"${root}/src"`)
   map = mapOf(await ui.drawn())
-  expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src` && s.bg === '#6b7280'))).toBe(true)
+  expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src` && s.c === '#5b9bd5'))).toBe(true)
   await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
   await clock.settle()
-  expect(ran).toContainEqual(['du', '-akxH', '-d', '1', '--', `${root}/src`])
+  expect(ran).toContainEqual(['du', '-akxH', '-d', '2', '--', `${root}/src`])
   expect(text(mapOf(await ui.drawn()))).toContain('x.ts')
   await $.tool.call({ tool: 'Edit', file_path: `${root}/src/x.ts`, old_string: 'a', new_string: 'b' } as any)
   await clock.settle()
