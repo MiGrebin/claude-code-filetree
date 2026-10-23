@@ -102,7 +102,7 @@ let gitNext: Promise<void> | null = null
 let queuedReads: string[] = []
 let showReads = true
 let showWrites = true
-let searchIndex: { root: string; paths: Promise<string[]> } | null = null
+let searchIndex: { root: string; paths: Promise<Indexed> } | null = null
 let activityId = 0
 let pointer = true
 let hovered = ''
@@ -878,13 +878,15 @@ async function listAll($: EngineInterface, t: FileTree): Promise<string[] | null
   }
 }
 
-function indexPaths($: EngineInterface, t: FileTree): Promise<string[]> {
+type Indexed = { paths: string[]; lower: string[] }
+
+function indexPaths($: EngineInterface, t: FileTree): Promise<Indexed> {
   if (searchIndex?.root !== t.root) {
-    const index: { root: string; paths: Promise<string[]> } = {
+    const index: { root: string; paths: Promise<Indexed> } = {
       root: t.root,
       paths: listAll($, t).then(paths => {
         if (paths === null && searchIndex === index) searchIndex = null
-        return paths ?? []
+        return { paths: paths ?? [], lower: (paths ?? []).map(p => relative(t.root, p).toLowerCase()) }
       }),
     }
     searchIndex = index
@@ -898,7 +900,9 @@ async function search($: EngineInterface, query: string): Promise<string[]> {
   const q = query.trim().toLowerCase()
   if (!q) return []
   const t = await get($)
-  const hits = (await indexPaths($, t)).filter(p => relative(t.root, p).toLowerCase().includes(q)).slice(0, SEARCH_REVEAL_LIMIT)
+  const index = await indexPaths($, t)
+  const hits: string[] = []
+  for (let i = 0; i < index.lower.length && hits.length < SEARCH_REVEAL_LIMIT; i++) if (index.lower[i]?.includes(q)) hits.push(index.paths[i] ?? '')
   if ((await get($)).query !== query) return []
   await revealPaths($, hits)
   const shown = await get($)
