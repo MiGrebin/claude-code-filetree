@@ -1,6 +1,7 @@
-import { type BuiltinToolResults, type EngineInterface, type Register, type Timer, update } from 'claude-code'
+import { type BuiltinToolResults, type EngineInterface, type Register, type RenderElement, type Timer, update } from 'claude-code'
 import { herdrError, herdrOpenCommand, herdrPane, isBinaryPath, LINUX_LAUNCH, openCommand, openWithCommand, tmuxOpenCommand, words } from './open'
 import type { ButtonProps } from './button'
+import { CACHE_KEEP, cacheName, CLEAN, coderFor, EXIT_FAILED, EXIT_MISSING, fitCells, PNG_DIRECT_BYTES, PNG_DIRECT_PIXELS, pictureKind, pngSize, POLICY, POSTER } from './peek'
 
 import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
@@ -83,7 +84,7 @@ let generation = 0
 let lastPress = { key: '', at: 0 }
 let noNerd = false
 let glyphSetting = 'auto'
-const WORDS: Record<string, string> = { up: 'up', cwd: 'cwd', refresh: 'sync', hidden: 'dots', size: 'size', collapse: 'fold', unselect: 'clear' }
+const WORDS: Record<string, string> = { up: 'up', cwd: 'cwd', refresh: 'sync', hidden: 'dots', size: 'size', collapse: 'fold', split: 'split', unselect: 'clear' }
 let openWithSetting = ''
 let binariesInDefaultApp = false
 let editWithSetting = ''
@@ -92,8 +93,21 @@ let palette: Palette = parsePalette('')
 let inTmux = false
 let inHerdr = false
 let previewLine = 1
-let previewed: { path: string; text: string; note: string; diff?: DiffLine[] } | null = null
+let previewed: Preview | null = null
 let previewRows = 20
+let splitAt: 'bottom' | 'top' = 'bottom'
+let peeked: Preview | null = null
+let peekPath = ''
+let peekRows = 8
+let peekTop = 0
+let overPeek = false
+let pictureBase = ''
+let pictureSession = ''
+let sessionDir = ''
+let splitShown = false
+let converting = false
+let nextJob: PictureJob | null = null
+const pictures = new Map<string, { sig: string; picture: Picture; retried?: boolean }>()
 let follow = true
 let followClaude = true
 let scanning: Promise<void> | null = null
@@ -130,6 +144,10 @@ const sizing = new Set<string>()
 const listLatest = new Map<string, number>()
 const unreadable = new Set<string>()
 const background = new Map<string, Background>()
+
+type Preview = { path: string; text: string; note: string; diff?: DiffLine[] }
+type PictureJob = { path: string; kind: 'png' | 'image' | 'video'; sig: string; mtime: number; size: number }
+type Picture = { state: 'pending' } | { state: 'ready'; file: string; generation: number; width: number; height: number } | { state: 'failed'; note: string }
 
 function osName($: EngineInterface): Promise<'linux' | 'darwin' | 'win32'> {
   platform ??= (async () => {
@@ -308,7 +326,7 @@ async function reset($: EngineInterface, root: string, focus = false): Promise<v
   searchIndex = null
   sizeEpoch += 1
   sizeQueue = []
-  await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, showSize: prev.root ? prev.showSize : sizeDefault }))
+  await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, showSize: prev.root ? prev.showSize : sizeDefault, split: prev.split }))
   const title = `Files: ${root.split('/').pop() || root}`
   if (focus) await $.ui.open({ id: PANE, title, focus: true })
   else if (!noDock) await $.ui.open({ id: PANE, title })
@@ -814,6 +832,7 @@ function scheduleScan($: EngineInterface, job: Job): void {
 
 async function touched($: EngineInterface, paths: string[], tone: string, show: boolean): Promise<void> {
   if (tone !== 'purple' && previewed && paths.map(posix).includes(previewed.path)) previewed = null
+  if (tone !== 'purple' && peeked && paths.map(posix).includes(peeked.path)) peeked = null
   if (await followCwd($)) return
   const t = await get($)
   if (!t.root) return
@@ -947,11 +966,16 @@ function fitSerialized(lines: string[], max: number): string[] {
 }
 
 async function loadPreview($: EngineInterface, path: string): Promise<void> {
+  previewed = await readPreview($, path)
+}
+
+async function readPreview($: EngineInterface, path: string): Promise<Preview> {
   let text = ''
   let note = ''
   try {
     const stat = await $.fs.stat(path)
-    if (stat.size > 4_000_000) note = `${formatSize(stat.size)}, too large to preview`
+    if (stat.kind !== 'file') note = 'not a regular file'
+    else if (stat.size > 4_000_000) note = `${formatSize(stat.size)}, too large to preview`
     else {
       text = await $.fs.read(path)
       if (text.slice(0, 8000).includes('\0')) {
@@ -968,7 +992,7 @@ async function loadPreview($: EngineInterface, path: string): Promise<void> {
   lines = lines.map(l => (l.length > PREVIEW_LINE ? `${l.slice(0, PREVIEW_LINE)}…` : l))
   const fit = fitSerialized(lines, PREVIEW_CHARS)
   if (total > PREVIEW_CHARS || fit.length < lines.length) note = `first ${fit.length.toLocaleString('en')} lines of ${total.toLocaleString('en')} characters`
-  previewed = { path, text: fit.join('\n'), note }
+  return { path, text: fit.join('\n'), note }
 }
 
 async function loadDiff($: EngineInterface, path: string, folder: boolean): Promise<boolean> {
@@ -1025,6 +1049,106 @@ async function diffFile($: EngineInterface, path: string): Promise<void> {
   } catch {
     $.ui.toast(`could not diff ${shortPath(path)} with ${diffWithSetting}`)
   }
+}
+
+async function pngHeader($: EngineInterface, file: string): Promise<{ width: number; height: number } | null> {
+  const run = await $.process.run(['od', '-An', '-tu1', '-N24', '--', file], { timeoutMs: 5_000 })
+  return run.exitCode === 0 ? pngSize(Uint8Array.from(run.stdout.trim().split(/\s+/).map(Number))) : null
+}
+
+async function makePicture($: EngineInterface, job: PictureJob): Promise<Picture> {
+  try {
+    if ((await osName($)) === 'win32') return { state: 'failed', note: 'image preview needs Linux or macOS' }
+    let file = job.path
+    let size = job.kind === 'png' && job.size <= PNG_DIRECT_BYTES ? await pngHeader($, job.path) : null
+    if (size && (size.width > PNG_DIRECT_PIXELS || size.height > PNG_DIRECT_PIXELS)) size = null
+    if (!size) {
+      const made = await $.process.run(['sh', '-c', POSTER, 'sh', job.path, pictureBase, pictureSession, job.sig, job.kind === 'video' ? 'video' : 'image', coderFor(job.path), String(CACHE_KEEP), POLICY], { timeoutMs: 30_000 })
+      const why = made.stderr.trim().split('\n').filter(Boolean)[0] ?? ''
+      if (made.exitCode === EXIT_MISSING) return { state: 'failed', note: why || 'no decoder on PATH' }
+      if (made.exitCode === EXIT_FAILED) return { state: 'failed', note: `could not decode${why ? `: ${why}` : ''}` }
+      if (made.exitCode !== 0 || !made.stdout.trim().startsWith('/')) return { state: 'failed', note: why || `could not decode, exit ${made.exitCode}` }
+      file = made.stdout.trim()
+      sessionDir = dirname(file)
+      size = await pngHeader($, file)
+    }
+    return size ? { state: 'ready', file, generation: Math.floor(job.mtime), ...size } : { state: 'failed', note: 'could not read the picture size' }
+  } catch (err) {
+    return { state: 'failed', note: String((err as Error)?.message ?? err).split('\n')[0] ?? 'could not decode' }
+  }
+}
+
+function forget($: EngineInterface, path: string): void {
+  const old = pictures.get(path)
+  pictures.delete(path)
+  if (old?.picture.state === 'ready' && old.picture.file !== path) void $.process.run(['rm', '-f', '--', old.picture.file], { timeoutMs: 5_000 }).catch(() => undefined)
+}
+
+async function convert($: EngineInterface, job: PictureJob): Promise<void> {
+  if (converting) {
+    if (nextJob && pictures.get(nextJob.path)?.sig === nextJob.sig) pictures.delete(nextJob.path)
+    nextJob = job
+    return
+  }
+  converting = true
+  let cur: PictureJob | null = job
+  while (cur) {
+    const made = await makePicture($, cur)
+    const entry = pictures.get(cur.path)
+    if (entry?.sig === cur.sig) entry.picture = made
+    else if (made.state === 'ready' && made.file !== cur.path) void $.process.run(['rm', '-f', '--', made.file], { timeoutMs: 5_000 }).catch(() => undefined)
+    void $.ui.invalidate('ui.render')
+    cur = nextJob
+    nextJob = null
+  }
+  converting = false
+}
+
+async function picture($: EngineInterface, path: string): Promise<Picture | null> {
+  const kind = pictureKind(path)
+  if (!kind) return null
+  const stat = await $.fs.stat(path).catch(() => null)
+  if (!stat) return { state: 'failed', note: 'could not read' }
+  if (stat.kind !== 'file') return { state: 'failed', note: 'not a regular file' }
+  const sig = cacheName(path, stat.mtimeMs, stat.size)
+  const known = pictures.get(path)
+  const gone = known?.sig === sig && known.picture.state === 'ready' && known.picture.file !== path && !(await $.fs.stat(known.picture.file).then(f => f.kind === 'file', () => false))
+  if (gone && known.retried) known.picture = { state: 'failed', note: 'the preview cache was cleared' }
+  if (gone && !known.retried) pictures.delete(path)
+  else if (known?.sig === sig) {
+    pictures.delete(path)
+    pictures.set(path, known)
+    return known.picture
+  }
+  if (known && pictures.has(path)) forget($, path)
+  pictures.set(path, { sig, picture: { state: 'pending' }, retried: gone })
+  for (const old of pictures.keys()) {
+    if (pictures.size <= CACHE_KEEP) break
+    forget($, old)
+  }
+  void convert($, { path, kind, sig, mtime: stat.mtimeMs, size: stat.size })
+  return { state: 'pending' }
+}
+
+async function toggleSplit($: EngineInterface): Promise<void> {
+  overPeek = false
+  peekTop = 0
+  await patch($, cur => ({ split: !cur.split }))
+}
+
+function scrollSplit($: EngineInterface, to: number): void {
+  const last = Math.max(0, (peeked?.text.split('\n').length ?? 1) - peekRows)
+  const top = Math.max(0, Math.min(last, to))
+  if (top === peekTop) return
+  peekTop = top
+  void $.ui.invalidate('ui.render')
+}
+
+function peekTarget(t: FileTree): string {
+  const cur = t.nodes.find(n => n.id === t.cursor)
+  if (cur && cur.kind !== 'dir') return cur.id
+  const sel = t.selected ? t.nodes.find(n => n.id === t.selected) : undefined
+  return sel && sel.kind !== 'dir' ? sel.id : ''
 }
 
 async function showPreview($: EngineInterface, path: string): Promise<void> {
@@ -1170,7 +1294,11 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
     const target = rows[Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + d))]
     return target ? patch($, () => ({ cursor: target.node.id, scroll: null })) : Promise.resolve()
   }
-  if (key === 'up' || key === 'k') await move(-1)
+  const page = Math.max(1, peekRows - 1)
+  const peek: Record<string, number> = { f: page, b: -page, pageup: -page, pagedown: page }
+  if (key === 'p' && surface !== 'desktop') await toggleSplit($)
+  else if (t.split && splitShown && surface !== 'desktop' && key in peek) scrollSplit($, peekTop + (peek[key] ?? 0))
+  else if (key === 'up' || key === 'k') await move(-1)
   else if (key === 'down' || key === 'j') await move(1)
   else if (key === 'pageup') await move(-10)
   else if (key === 'pagedown') await move(10)
@@ -1221,6 +1349,7 @@ async function pressHeader($: EngineInterface, id: string): Promise<void> {
   else if (id === 'collapse') await patch($, cur => ({ expanded: [], nodes: dropBelow(cur.nodes, cur.nodes.filter(x => x.parent === cur.root && x.kind === 'dir').map(x => x.id)) }))
   else if (id === 'unselect') await patch($, () => ({ selected: '' }))
   else if (id === 'external' && t.preview) await openFile($, t.preview, { mode: '' })
+  else if (id === 'split') await toggleSplit($)
 }
 
 function shortPath(path: string): string {
@@ -1245,6 +1374,7 @@ export const register: Register = (on, options) => {
   palette = parsePalette(options?.palette)
   diffWithSetting = typeof options?.diff === 'string' ? options.diff.trim() : ''
   noDock = options?.start === 'off'
+  splitAt = options?.split === 'top' ? 'top' : 'bottom'
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'filetree', description: 'Show or hide the file tree; args: [path | open] (no path = cwd, open = never hide)' })
     if (palette.unknown.length) void $.ui.toast(`filetree palette: ignored ${palette.unknown.join(' ')}; use key=#hex with fg, bg, accent, muted, urgent, selection, hover, added, modified, renamed, add or del`)
@@ -1252,6 +1382,8 @@ export const register: Register = (on, options) => {
     useDrives(windows)
     inTmux = !windows && Boolean(await $.env.get('TMUX'))
     inHerdr = !windows && Boolean(await $.env.get('HERDR_ENV'))
+    pictureSession = (await $.session.id()).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'session'
+    pictureBase = ((await $.env.get('XDG_RUNTIME_DIR')) || (await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '') || '/'
     home = posix(((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/[\\/]+$/, ''))
     activityId = Math.max(activityId, ...(await activities($)).map(a => a.id))
     void (async () => {
@@ -1389,6 +1521,20 @@ export const register: Register = (on, options) => {
       }
       return {}
     }
+    if (e.requestId === PANE && e.element === 'peek' && e.data && typeof e.data === 'object') {
+      const data = e.data as { key?: unknown; over?: unknown; scrollTo?: unknown }
+      if (typeof data.over === 'boolean') overPeek = data.over
+      else if (typeof data.scrollTo === 'number') {
+        const last = Math.max(0, (peeked?.text.split('\n').length ?? 1) - peekRows)
+        scrollSplit($, Math.round(Math.max(0, Math.min(1, data.scrollTo)) * last))
+      } else if (typeof data.key === 'string') {
+        const page = Math.max(1, peekRows - 1)
+        const by: Record<string, number> = { up: -1, k: -1, down: 1, j: 1, f: page, b: -page, pageup: -page, pagedown: page, space: page, ' ': page, home: -Infinity, end: Infinity }
+        if (data.key === 'p') await toggleSplit($)
+        else if (data.key in by) scrollSplit($, peekTop + (by[data.key] ?? 0))
+      }
+      return {}
+    }
     if (e.requestId !== PANE || e.element !== 'rows' || !e.data || typeof e.data !== 'object') return next(e)
     const data = e.data as { press?: unknown; key?: unknown; ctrl?: unknown; shift?: unknown; scrollTo?: unknown; copy?: unknown }
     void sync($)
@@ -1427,6 +1573,12 @@ export const register: Register = (on, options) => {
 
   on('session.end', async ($, e, next) => {
     const result = await next(e)
+    if (sessionDir) {
+      const dir = sessionDir
+      sessionDir = ''
+      pictures.clear()
+      await $.process.run(['sh', '-c', CLEAN, 'sh', dir], { timeoutMs: 10_000 }).catch(() => undefined)
+    }
     if (e.reason === 'clear' || e.reason === 'resume' || e.reason === 'other') $.clock.after(0, () => void settleRoot($))
     return result
   })
@@ -1442,6 +1594,10 @@ export const register: Register = (on, options) => {
     const t = await get($)
     if (t.preview) {
       await scrollPreview($, Math.sign(e.by) * Math.max(3, Math.abs(e.by)))
+      return {}
+    }
+    if (t.split && overPeek) {
+      scrollSplit($, peekTop + Math.sign(e.by) * Math.max(3, Math.abs(e.by)))
       return {}
     }
     const to = Math.max(0, Math.min(view.max, (t.scroll ?? view.from) + Math.sign(e.by) * Math.max(3, Math.abs(e.by))))
@@ -1486,7 +1642,9 @@ export const register: Register = (on, options) => {
       return <Empty />
     }
     const unicode = glyphSetting === 'plain' || glyphSetting === 'text' || (glyphSetting === 'auto' && (noNerd || e.surface === 'desktop'))
-    const { Box, Text, Button, Input, Client } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button, Input, Client } = elements
+    const Image = 'Image' in elements ? elements.Image : undefined
     const t = await get($)
     const light = !themeMtime && e.surface !== 'desktop' && lightTerminal
     const theme: Theme = { ...(light ? LIGHT_THEME : ((await $.state.get(THEME)).value ?? DEFAULT_THEME)), ...palette.theme }
@@ -1556,7 +1714,13 @@ export const register: Register = (on, options) => {
     const untracked = new Set(t.untrackedDirs)
     const width = Math.max(24, e.props.bodyColumns)
     const rows = visibleRows(t)
-    const fixed = 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
+    const body = e.props.scroll?.bodyRows ?? 40
+    const chrome = 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
+    const spare = body - chrome - 5
+    const splitRows = t.split && !nativeScroll && spare >= 6 ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
+    splitShown = splitRows > 0
+    if (!splitShown) overPeek = false
+    const fixed = splitRows + 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
     const room = nativeScroll ? Math.max(1, rows.length) : Math.max(5, (e.props.scroll?.bodyRows ?? 40) - fixed)
     const isLit = (id: string) => bright.has(id) || dimmed.has(id)
     const focus = followClaude && t.flashOn ? ([...t.flash].reverse().find(id => id !== BRANCH_ROW) ?? t.cursor) : t.cursor
@@ -1595,6 +1759,7 @@ export const register: Register = (on, options) => {
       { id: 'hidden', label: unicode ? (t.showHidden ? '⊙' : '○') : t.showHidden ? '\u{f0b95}' : '\u{eae7}', dim: !t.showHidden, hint: t.showHidden ? 'hide hidden files' : 'show hidden files' },
       { id: 'size', label: unicode ? '◫' : '\u{ea90}', dim: !t.showSize, hint: t.showSize ? 'show dates' : 'show sizes' },
       { id: 'collapse', label: unicode ? '⊟' : '\u{eac5}', dim: true, hint: 'collapse all' },
+      ...(nativeScroll ? [] : [{ id: 'split', label: unicode ? '⊡' : splitAt === 'top' ? '\u{ebf6}' : '\u{ec01}', dim: !t.split, hint: t.split ? 'hide preview' : 'show preview' }]),
       ...(t.selected ? [{ id: 'unselect', label: unicode ? '⊘' : '\u{eabd}', dim: false, hint: 'clear selection' }] : []),
     ]
     const wordButtons = plainButtons.map(b => ({ ...b, label: WORDS[b.id] ?? b.label }))
@@ -1724,6 +1889,61 @@ export const register: Register = (on, options) => {
       )
     }
 
+    const peek = async () => {
+      if (!splitRows) return null
+      peekRows = splitRows - 2
+      const target = peekTarget(t)
+      if (target !== peekPath) {
+        peekPath = target
+        peeked = null
+        peekTop = 0
+        overPeek = false
+      }
+      let start = peekTop
+      const rule = <Text key="peek-rule" color={theme.muted}>{'─'.repeat(Math.max(1, e.props.bodyColumns))}</Text>
+      const name = target ? (inside(t.root, target) ? relative(t.root, target) : shortPath(target)) : ''
+      const pic = target ? await picture($, target) : null
+      if (!target || pic) overPeek = false
+      let content: RenderElement
+      let status = ''
+      if (!target) content = <Text color={theme.muted}>no file selected</Text>
+      else if (pic) {
+        if (pic.state === 'ready' && Image) {
+          const fit = fitCells(pic, Math.max(1, e.props.bodyColumns - 1), peekRows)
+          status = `${pic.width}×${pic.height}`
+          content = <Image key="peek-image" source={{ file: pic.file, format: 'png', generation: pic.generation }} columns={fit.columns} rows={fit.rows} alt={name} />
+        } else content = <Text color={theme.muted}>{pic.state === 'pending' ? 'decoding…' : pic.state === 'failed' ? pic.note : 'images show in the terminal'}</Text>
+      } else {
+        if (peeked?.path !== target) peeked = await readPreview($, target)
+        const lines = peeked.text.split('\n')
+        const last = Math.max(0, lines.length - peekRows)
+        start = Math.min(start, last)
+        const markdown = /\.(md|markdown|mdx)$/i.test(target)
+        const win = previewLines(peeked.text, start, peekRows, markdown)
+        status = peeked.text ? `${start + 1}–${Math.min(lines.length, start + peekRows)}/${lines.length}` : ''
+        const size = Math.max(1, Math.round((peekRows * peekRows) / Math.max(1, lines.length)))
+        const bar = lines.length > peekRows ? { pos: last ? Math.round((start / last) * (peekRows - size)) : 0, size, thumb: theme.accent, track: theme.muted } : undefined
+        if (!peeked.text) overPeek = false
+        content = peeked.text
+          ? <Client key="peek" module="./rows.tsx" props={{ rows: [], active: '', ...rowColors, pointer, ...(bar ? { bar } : {}), preview: { text: win.text, path: target, startLine: win.top + 1, markdown, rows: peekRows } } satisfies RowsProps} />
+          : <Text color={theme.muted}>{peeked.note || 'empty file'}</Text>
+      }
+      const title = (
+        <Box key="peek-title" flexDirection="row" height={1} overflow="hidden">
+          <Box flexShrink={1} flexGrow={1} overflow="hidden">
+            <Text bold wrap="truncate-start">{name}</Text>
+          </Box>
+          {status ? <Text color={theme.muted}>{` ${status}`}</Text> : null}
+          {peeked?.note && peeked.text && !pic ? <Text color={theme.muted}>{' · partial'}</Text> : null}
+        </Box>
+      )
+      const box = <Box key="peek-body" flexDirection="column" height={peekRows} overflow="hidden">{content}</Box>
+      return splitAt === 'top'
+        ? <Box key="peek-split" flexDirection="column" flexShrink={0}>{title}{box}{rule}</Box>
+        : <Box key="peek-split" flexDirection="column" flexShrink={0}>{rule}{title}{box}</Box>
+    }
+    const split = await peek()
+
     const park = () => void $.ui.focus({ requestId: PANE, key: showShortcuts ? 'nav-o' : 'rows' }).catch(() => {})
 
     return (
@@ -1739,6 +1959,7 @@ export const register: Register = (on, options) => {
             <Text> </Text>
           </Box>
         </Box>
+        {splitAt === 'top' ? split : null}
         {branchRow()}
         {!t.top && showHints && <Text color={theme.muted}>{unicode ? '± ' : '\u{e702} '}no git repo · git status starts after git init</Text>}
         {searchGap ? <Text key="gap-above"> </Text> : null}
@@ -1771,6 +1992,7 @@ export const register: Register = (on, options) => {
           props={{ rows: specs, active: t.cursor, ...rowColors, pointer, ...(bar ? { bar } : {}) } satisfies RowsProps}
         />
         <Box flexGrow={1} />
+        {splitAt === 'bottom' ? split : null}
         {(t.selected || latest) && (
           <Box flexDirection="row">
             {t.selected ? (
