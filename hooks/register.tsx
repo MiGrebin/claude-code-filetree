@@ -255,11 +255,13 @@ async function readGit($: EngineInterface): Promise<void> {
   if (!t.root || !t.top) return
   const root = t.root
   try {
-    const status = await git($, root, ['status', '--porcelain=v1', '-b', '-z', '--ignored=traditional', '--untracked-files=normal', '--', '.'])
+    const [status, head] = await Promise.all([
+      git($, root, ['status', '--porcelain=v1', '-b', '-z', '--ignored=traditional', '--untracked-files=normal', '--', '.']),
+      git($, root, ['diff', 'HEAD', '--numstat', '-z', '--', '.']),
+    ])
     if (status.exitCode !== 0) return
     const parsed = parseGit(status.stdout, root, t.prefix)
     const diff: Record<string, [number, number]> = {}
-    const head = await git($, root, ['diff', 'HEAD', '--numstat', '-z', '--', '.'])
     if (head.exitCode === 0) parseNumstat(head.stdout, root, t.prefix, diff)
     const files = { ...parsed.files }
     if (parsed.untrackedDirs.length) {
