@@ -1759,7 +1759,7 @@ export const register: Register = (on, options) => {
       { id: 'hidden', label: unicode ? (t.showHidden ? '⊙' : '○') : t.showHidden ? '\u{f0b95}' : '\u{eae7}', dim: !t.showHidden, hint: t.showHidden ? 'hide hidden files' : 'show hidden files' },
       { id: 'size', label: unicode ? '◫' : '\u{ea90}', dim: !t.showSize, hint: t.showSize ? 'show dates' : 'show sizes' },
       { id: 'collapse', label: unicode ? '⊟' : '\u{eac5}', dim: true, hint: 'collapse all' },
-      ...(nativeScroll ? [] : [{ id: 'split', label: unicode ? (splitAt === 'top' ? '⬒' : '⬓') : splitAt === 'top' ? '\u{ebf6}' : '\u{ec01}', dim: !t.split, hint: t.split ? 'hide preview' : 'show preview' }]),
+      ...(nativeScroll ? [] : [{ id: 'split', label: unicode ? '⊡' : splitAt === 'top' ? '\u{ebf6}' : '\u{ec01}', dim: !t.split, hint: t.split ? 'hide preview' : 'show preview' }]),
       ...(t.selected ? [{ id: 'unselect', label: unicode ? '⊘' : '\u{eabd}', dim: false, hint: 'clear selection' }] : []),
     ]
     const wordButtons = plainButtons.map(b => ({ ...b, label: WORDS[b.id] ?? b.label }))
