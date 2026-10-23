@@ -74,6 +74,8 @@ const SIZE_WALK_LIMIT = 50_000
 const AGE_TICK_MS = 60_000
 
 let blink: Timer | null = null
+let cached: FileTree | null = null
+let snapshot: Timer | null = null
 let themePoll: Timer | null = null
 let gitPoll: Timer | null = null
 let gitStamp: string | null = null
@@ -119,7 +121,7 @@ let gitNext: Promise<void> | null = null
 let queuedReads: string[] = []
 let showReads = true
 let showWrites = true
-let searchIndex: { root: string; paths: Promise<string[]> } | null = null
+let searchIndex: { root: string; paths: Promise<Indexed> } | null = null
 let activityId = 0
 let pointer = true
 let hovered = ''
@@ -194,12 +196,18 @@ async function readThemeSetting($: EngineInterface): Promise<void> {
   void $.ui.invalidate('ui.render')
 }
 
-async function get($: EngineInterface): Promise<FileTree> {
-  return { ...emptyTree(''), ...(await $.state.get(TREE)).value }
+async function get(_$: EngineInterface): Promise<FileTree> {
+  cached ??= emptyTree('')
+  return cached
 }
 
 async function put($: EngineInterface, fn: (t: FileTree) => FileTree): Promise<void> {
-  await update($, TREE, cur => fn({ ...emptyTree(''), ...cur }))
+  cached = fn(cached ?? emptyTree(''))
+  snapshot ??= $.clock.after(1_000, () => {
+    snapshot = null
+    if (cached) void $.state.set(TREE, cached)
+  })
+  await $.ui.invalidate('ui.render')
 }
 
 function patch($: EngineInterface, fn: (t: FileTree) => Partial<FileTree>) {
@@ -282,11 +290,13 @@ async function readGit($: EngineInterface): Promise<void> {
   if (!t.root || !t.top) return
   const root = t.root
   try {
-    const status = await git($, root, ['status', '--porcelain=v1', '-b', '-z', '--ignored=traditional', '--untracked-files=normal', '--', '.'])
+    const [status, head] = await Promise.all([
+      git($, root, ['status', '--porcelain=v1', '-b', '-z', '--ignored=traditional', '--untracked-files=normal', '--', '.']),
+      git($, root, ['diff', 'HEAD', '--numstat', '-z', '--', '.']),
+    ])
     if (status.exitCode !== 0) return
     const parsed = parseGit(status.stdout, root, t.prefix)
     const diff: Record<string, [number, number]> = {}
-    const head = await git($, root, ['diff', 'HEAD', '--numstat', '-z', '--', '.'])
     if (head.exitCode === 0) parseNumstat(head.stdout, root, t.prefix, diff)
     const files = { ...parsed.files }
     if (parsed.untrackedDirs.length) {
@@ -327,7 +337,7 @@ function refreshGit($: EngineInterface): Promise<void> {
   return gitNext
 }
 
-async function reset($: EngineInterface, root: string, focus = false): Promise<void> {
+async function reset($: EngineInterface, root: string, focus = false, ready?: Promise<void>): Promise<void> {
   const prev = await get($)
   generation += 1
   blink?.cancel()
@@ -338,10 +348,13 @@ async function reset($: EngineInterface, root: string, focus = false): Promise<v
   sizeQueue = []
   await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, showSize: prev.root ? prev.showSize : sizeDefault, split: prev.split }))
   const title = `Files: ${root.split('/').pop() || root}`
+  const listed = loadDirs($, [root])
+  const repo = detectRepo($)
+  await ready
   if (focus) await $.ui.open({ id: PANE, title, focus: true })
   else if (!noDock) await $.ui.open({ id: PANE, title })
-  await loadDirs($, [root])
-  await detectRepo($)
+  await listed
+  await repo
   await refreshGit($)
 }
 
@@ -905,13 +918,15 @@ async function listAll($: EngineInterface, t: FileTree): Promise<string[] | null
   }
 }
 
-function indexPaths($: EngineInterface, t: FileTree): Promise<string[]> {
+type Indexed = { paths: string[]; lower: string[] }
+
+function indexPaths($: EngineInterface, t: FileTree): Promise<Indexed> {
   if (searchIndex?.root !== t.root) {
-    const index: { root: string; paths: Promise<string[]> } = {
+    const index: { root: string; paths: Promise<Indexed> } = {
       root: t.root,
       paths: listAll($, t).then(paths => {
         if (paths === null && searchIndex === index) searchIndex = null
-        return paths ?? []
+        return { paths: paths ?? [], lower: (paths ?? []).map(p => relative(t.root, p).toLowerCase()) }
       }),
     }
     searchIndex = index
@@ -925,7 +940,9 @@ async function search($: EngineInterface, query: string): Promise<string[]> {
   const q = query.trim().toLowerCase()
   if (!q) return []
   const t = await get($)
-  const hits = (await indexPaths($, t)).filter(p => relative(t.root, p).toLowerCase().includes(q)).slice(0, SEARCH_REVEAL_LIMIT)
+  const index = await indexPaths($, t)
+  const hits: string[] = []
+  for (let i = 0; i < index.lower.length && hits.length < SEARCH_REVEAL_LIMIT; i++) if (index.lower[i]?.includes(q)) hits.push(index.paths[i] ?? '')
   if ((await get($)).query !== query) return []
   await revealPaths($, hits)
   const shown = await get($)
@@ -1494,6 +1511,7 @@ export const register: Register = (on, options) => {
   noDock = options?.start === 'off'
   splitAt = options?.split === 'top' ? 'top' : 'bottom'
   on('session.start', async ($, e, next) => {
+    cached ??= { ...emptyTree(''), ...(await $.state.get(TREE)).value }
     await $.command.register({ name: 'filetree', description: 'Show or hide the file tree; args: [path | open] (no path = cwd, open = never hide)' })
     if (palette.unknown.length) void $.ui.toast(`filetree palette: ignored ${palette.unknown.join(' ')}; use key=#hex with fg, bg, accent, muted, urgent, selection, hover, added, modified, renamed, add or del`)
     const windows = (await $.env.get('OS')) === 'Windows_NT'
@@ -1507,15 +1525,24 @@ export const register: Register = (on, options) => {
     home = posix(((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/[\\/]+$/, ''))
     activityId = Math.max(activityId, ...(await activities($)).map(a => a.id))
     void (async () => {
-      pointer = await finePointerOk($)
-      try {
-        const remote = Boolean((await $.env.get('SSH_CONNECTION')) || (await $.env.get('SSH_TTY')))
-        noNerd = !remote && (windows || (await fontState($, 'f04eb')) !== 'ok')
-      } catch {
-        noNerd = true
-      }
-      await loadTheme($)
-      await readThemeSetting($).catch(() => undefined)
+      const ready = (async () => {
+        pointer = await finePointerOk($)
+        try {
+          const remote = Boolean((await $.env.get('SSH_CONNECTION')) || (await $.env.get('SSH_TTY')))
+          noNerd = !remote && (windows || (await fontState($, 'f04eb')) !== 'ok')
+        } catch {
+          noNerd = true
+        }
+        await loadTheme($)
+        await readThemeSetting($).catch(() => undefined)
+      })()
+      const t = await get($)
+      if (t.flashOn) await patch($, () => ({ flash: [], flashDim: [], flashOn: false, flashTones: {} }))
+      if (t.preview) await patch($, () => ({ preview: '', previewTop: 0 }))
+      await setActivities($, cur => cur.map(a => (a.state === 'running' ? { ...a, state: 'failed', label: `${a.kind} interrupted` } : a)))
+      const cwd = await cwdOf($)
+      const shown = !t.root || t.nodes.length === 0 || (follow && t.root !== cwd) ? reset($, cwd, false, ready) : ready.then(() => (noDock ? undefined : $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` })))
+      await ready
       themePoll?.cancel()
       themePoll = themeMtime ? $.clock.every(THEME_POLL_MS, () => void loadTheme($)) : null
       ageTick?.cancel()
@@ -1523,13 +1550,7 @@ export const register: Register = (on, options) => {
       gitPoll?.cancel()
       gitStamp = null
       gitPoll = $.clock.every(GIT_POLL_MS, () => void followCwd($).then(moved => moved || gitChanged($)))
-      const t = await get($)
-      if (t.flashOn) await patch($, () => ({ flash: [], flashDim: [], flashOn: false, flashTones: {} }))
-      if (t.preview) await patch($, () => ({ preview: '', previewTop: 0 }))
-      await setActivities($, cur => cur.map(a => (a.state === 'running' ? { ...a, state: 'failed', label: `${a.kind} interrupted` } : a)))
-      const cwd = await cwdOf($)
-      if (!t.root || t.nodes.length === 0 || (follow && t.root !== cwd)) await reset($, cwd)
-      else if (!noDock) await $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` })
+      await shown
     })()
     return next(e)
   })
@@ -1696,6 +1717,9 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
+    cached = null
+    snapshot?.cancel()
+    snapshot = null
     const result = await next(e)
     if (sessionDir) {
       const dir = sessionDir
