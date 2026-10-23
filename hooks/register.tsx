@@ -1,7 +1,7 @@
 import { type BuiltinToolResults, type EngineInterface, type Register, type RenderElement, type Timer, update } from 'claude-code'
 import { herdrError, herdrOpenCommand, herdrPane, isBinaryPath, LINUX_LAUNCH, openCommand, openWithCommand, tmuxOpenCommand, words } from './open'
 import type { ButtonProps } from './button'
-import { CACHE_KEEP, cacheName, EXIT_FAILED, EXIT_MISSING, fitCells, PNG_DIRECT_BYTES, PNG_DIRECT_PIXELS, pictureKind, pngSize, POSTER } from './peek'
+import { CACHE_KEEP, cacheName, CLEAN, coderFor, EXIT_FAILED, EXIT_MISSING, fitCells, PNG_DIRECT_BYTES, PNG_DIRECT_PIXELS, pictureKind, pngSize, POLICY, POSTER } from './peek'
 
 import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
@@ -102,10 +102,12 @@ let peekRows = 8
 let peekTop = 0
 let overPeek = false
 let pictureBase = ''
+let pictureSession = ''
+let sessionDir = ''
 let splitShown = false
 let converting = false
 let nextJob: PictureJob | null = null
-const pictures = new Map<string, { sig: string; picture: Picture }>()
+const pictures = new Map<string, { sig: string; picture: Picture; retried?: boolean }>()
 let follow = true
 let followClaude = true
 let scanning: Promise<void> | null = null
@@ -1061,12 +1063,13 @@ async function makePicture($: EngineInterface, job: PictureJob): Promise<Picture
     let size = job.kind === 'png' && job.size <= PNG_DIRECT_BYTES ? await pngHeader($, job.path) : null
     if (size && (size.width > PNG_DIRECT_PIXELS || size.height > PNG_DIRECT_PIXELS)) size = null
     if (!size) {
-      const made = await $.process.run(['sh', '-c', POSTER, 'sh', job.path, pictureBase, job.sig, job.kind === 'video' ? 'video' : 'image', String(CACHE_KEEP)], { timeoutMs: 30_000 })
+      const made = await $.process.run(['sh', '-c', POSTER, 'sh', job.path, pictureBase, pictureSession, job.sig, job.kind === 'video' ? 'video' : 'image', coderFor(job.path), String(CACHE_KEEP), POLICY], { timeoutMs: 30_000 })
       const why = made.stderr.trim().split('\n').filter(Boolean)[0] ?? ''
       if (made.exitCode === EXIT_MISSING) return { state: 'failed', note: why || 'no decoder on PATH' }
       if (made.exitCode === EXIT_FAILED) return { state: 'failed', note: `could not decode${why ? `: ${why}` : ''}` }
       if (made.exitCode !== 0 || !made.stdout.trim().startsWith('/')) return { state: 'failed', note: why || `could not decode, exit ${made.exitCode}` }
       file = made.stdout.trim()
+      sessionDir = dirname(file)
       size = await pngHeader($, file)
     }
     return size ? { state: 'ready', file, generation: Math.floor(job.mtime), ...size } : { state: 'failed', note: 'could not read the picture size' }
@@ -1109,13 +1112,16 @@ async function picture($: EngineInterface, path: string): Promise<Picture | null
   if (stat.kind !== 'file') return { state: 'failed', note: 'not a regular file' }
   const sig = cacheName(path, stat.mtimeMs, stat.size)
   const known = pictures.get(path)
-  if (known?.sig === sig) {
+  const gone = known?.sig === sig && known.picture.state === 'ready' && known.picture.file !== path && !(await $.fs.stat(known.picture.file).then(f => f.kind === 'file', () => false))
+  if (gone && known.retried) known.picture = { state: 'failed', note: 'the preview cache was cleared' }
+  if (gone && !known.retried) pictures.delete(path)
+  else if (known?.sig === sig) {
     pictures.delete(path)
     pictures.set(path, known)
     return known.picture
   }
-  if (known) forget($, path)
-  pictures.set(path, { sig, picture: { state: 'pending' } })
+  if (known && pictures.has(path)) forget($, path)
+  pictures.set(path, { sig, picture: { state: 'pending' }, retried: gone })
   for (const old of pictures.keys()) {
     if (pictures.size <= CACHE_KEEP) break
     forget($, old)
@@ -1376,6 +1382,7 @@ export const register: Register = (on, options) => {
     useDrives(windows)
     inTmux = !windows && Boolean(await $.env.get('TMUX'))
     inHerdr = !windows && Boolean(await $.env.get('HERDR_ENV'))
+    pictureSession = (await $.session.id()).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'session'
     pictureBase = ((await $.env.get('XDG_RUNTIME_DIR')) || (await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '') || '/'
     home = posix(((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/[\\/]+$/, ''))
     activityId = Math.max(activityId, ...(await activities($)).map(a => a.id))
@@ -1566,6 +1573,12 @@ export const register: Register = (on, options) => {
 
   on('session.end', async ($, e, next) => {
     const result = await next(e)
+    if (sessionDir) {
+      const dir = sessionDir
+      sessionDir = ''
+      pictures.clear()
+      await $.process.run(['sh', '-c', CLEAN, 'sh', dir], { timeoutMs: 10_000 }).catch(() => undefined)
+    }
     if (e.reason === 'clear' || e.reason === 'resume' || e.reason === 'other') $.clock.after(0, () => void settleRoot($))
     return result
   })
@@ -1746,7 +1759,7 @@ export const register: Register = (on, options) => {
       { id: 'hidden', label: unicode ? (t.showHidden ? '⊙' : '○') : t.showHidden ? '\u{f0b95}' : '\u{eae7}', dim: !t.showHidden, hint: t.showHidden ? 'hide hidden files' : 'show hidden files' },
       { id: 'size', label: unicode ? '◫' : '\u{ea90}', dim: !t.showSize, hint: t.showSize ? 'show dates' : 'show sizes' },
       { id: 'collapse', label: unicode ? '⊟' : '\u{eac5}', dim: true, hint: 'collapse all' },
-      ...(nativeScroll ? [] : [{ id: 'split', label: unicode ? '▤' : '\u{eb57}', dim: !t.split, hint: t.split ? 'hide preview' : 'show preview' }]),
+      ...(nativeScroll ? [] : [{ id: 'split', label: unicode ? (splitAt === 'top' ? '⬒' : '⬓') : splitAt === 'top' ? '\u{ebf6}' : '\u{ec01}', dim: !t.split, hint: t.split ? 'hide preview' : 'show preview' }]),
       ...(t.selected ? [{ id: 'unselect', label: unicode ? '⊘' : '\u{eabd}', dim: false, hint: 'clear selection' }] : []),
     ]
     const wordButtons = plainButtons.map(b => ({ ...b, label: WORDS[b.id] ?? b.label }))

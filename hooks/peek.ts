@@ -7,13 +7,28 @@ export const CACHE_KEEP = 64
 export const EXIT_MISSING = 3
 export const EXIT_FAILED = 4
 
+const CODERS: Record<string, string> = { png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp', bmp: 'bmp', tif: 'tiff', tiff: 'tiff', avif: 'avif', heic: 'heic', heif: 'heic', ico: 'ico', jxl: 'jxl', qoi: 'qoi', tga: 'tga' }
+const DEMUXERS: Record<string, string> = { mp4: 'mov', m4v: 'mov', mov: 'mov', '3gp': 'mov', mkv: 'matroska', webm: 'matroska', avi: 'avi', wmv: 'asf', flv: 'flv', mpg: 'mpeg', mpeg: 'mpeg', ogv: 'ogg' }
+
+export const POLICY = [
+  '<policymap>',
+  '  <policy domain="delegate" rights="none" pattern="*"/>',
+  '  <policy domain="coder" rights="none" pattern="*"/>',
+  '  <policy domain="coder" rights="read" pattern="{PNG,JPEG,GIF,WEBP,BMP,TIFF,AVIF,HEIC,ICO,JXL,QOI,TGA}"/>',
+  '  <policy domain="coder" rights="write" pattern="PNG"/>',
+  '  <policy domain="path" rights="none" pattern="@*"/>',
+  '  <policy domain="filter" rights="none" pattern="*"/>',
+  '</policymap>',
+].join('\n')
+
 export const POSTER = [
-  'src=$1 base=$2 name=$3 kind=$4 keep=$5',
-  'd="$base/filetree-preview-$(id -u)"',
-  '[ -L "$d" ] && { echo "cache folder $d is a symbolic link" >&2; exit 1; }',
-  'mkdir -m 700 "$d" 2>/dev/null',
-  '[ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || { echo "cache folder $d is not ours" >&2; exit 1; }',
-  'chmod 700 "$d" || exit 1',
+  'src=$1 base=$2 session=$3 name=$4 kind=$5 coder=$6 keep=$7 policy=$8',
+  'private() { [ -L "$1" ] && { echo "cache folder $1 is a symbolic link" >&2; exit 1; }; mkdir -m 700 "$1" 2>/dev/null; [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] || { echo "cache folder $1 is not ours" >&2; exit 1; }; chmod 700 "$1" || exit 1; }',
+  'top="$base/filetree-preview-$(id -u)"',
+  'private "$top"',
+  'd="$top/$session"',
+  'private "$d"',
+  'printf "%s\\n" "$policy" > "$d/policy.xml" || exit 1',
   'out="$d/$name"',
   'tmp=$(mktemp "$d/.part.XXXXXX") || exit 1',
   'trap \'rm -f "$tmp"\' EXIT',
@@ -21,20 +36,26 @@ export const POSTER = [
   'done_() { mv -f "$tmp" "$out" || exit 1; trap - EXIT; ls -t "$d" | grep "\\.png$" | tail -n +$((keep + 1)) | while read -r f; do rm -f "$d/$f"; done; printf "%s" "$out"; exit 0; }',
   'scale="scale=\'min(1600,iw)\':\'min(1600,ih)\':force_original_aspect_ratio=decrease"',
   'if [ "$kind" = video ]; then',
-  '  if command -v ffmpegthumbnailer >/dev/null 2>&1; then tried=1; ffmpegthumbnailer -i "$src" -o "$tmp" -s 1024 -c png >/dev/null 2>&1 && [ -s "$tmp" ] && done_; fi',
   '  if command -v ffmpeg >/dev/null 2>&1; then',
   '    tried=1',
-  '    ffmpeg -nostdin -v error -y -ss 1 -i "$src" -an -sn -frames:v 1 -vf "$scale" -f image2 -c:v png "$tmp" && [ -s "$tmp" ] && done_',
-  '    ffmpeg -nostdin -v error -y -i "$src" -an -sn -frames:v 1 -vf "$scale" -f image2 -c:v png "$tmp" && [ -s "$tmp" ] && done_',
+  '    ffmpeg -nostdin -v error -y -protocol_whitelist file -f "$coder" -ss 1 -i "file:$src" -an -sn -dn -frames:v 1 -vf "$scale" -f image2 -c:v png "$tmp" && [ -s "$tmp" ] && done_',
+  '    ffmpeg -nostdin -v error -y -protocol_whitelist file -f "$coder" -i "file:$src" -an -sn -dn -frames:v 1 -vf "$scale" -f image2 -c:v png "$tmp" && [ -s "$tmp" ] && done_',
   '  fi',
   '  [ -n "$tried" ] && exit 4',
-  '  echo "no ffmpegthumbnailer or ffmpeg on PATH for a poster frame" >&2; exit 3',
+  '  echo "no ffmpeg on PATH for a poster frame" >&2; exit 3',
   'fi',
-  'if command -v magick >/dev/null 2>&1; then tried=1; magick -limit memory 256MiB -limit map 512MiB -limit area 128MP -limit width 32KP -limit height 32KP -limit time 20 "$src[0]" -auto-orient -resize "1600x1600>" "png:$tmp" && [ -s "$tmp" ] && done_; fi',
-  'if command -v ffmpeg >/dev/null 2>&1; then tried=1; ffmpeg -nostdin -v error -y -i "$src" -frames:v 1 -vf "$scale" -f image2 -c:v png "$tmp" && [ -s "$tmp" ] && done_; fi',
+  'if command -v magick >/dev/null 2>&1; then tried=1; MAGICK_CONFIGURE_PATH="$d" magick -limit memory 256MiB -limit map 512MiB -limit area 128MP -limit width 32KP -limit height 32KP -limit time 20 "$coder:$src[0]" -auto-orient -resize "1600x1600>" "png:$tmp" && [ -s "$tmp" ] && done_; fi',
+  'if command -v ffmpeg >/dev/null 2>&1; then tried=1; ffmpeg -nostdin -v error -y -protocol_whitelist file -f image2 -i "file:$src" -frames:v 1 -vf "$scale" -f image2 -c:v png "$tmp" && [ -s "$tmp" ] && done_; fi',
   '[ -n "$tried" ] && exit 4',
   'echo "no magick or ffmpeg on PATH to decode it" >&2; exit 3',
 ].join('\n')
+
+export const CLEAN = 'd=$1; [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && rm -rf -- "$d"; exit 0'
+
+export function coderFor(path: string): string {
+  const ext = extension(path)
+  return CODERS[ext] ?? DEMUXERS[ext] ?? ''
+}
 
 function extension(path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1)
