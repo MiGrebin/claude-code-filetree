@@ -50,7 +50,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
   } else state.ref.unpoint = surface.onPointer(e => {
     const cur = surface.state ?? state
     if (props.preview && (e.type === 'enter' || e.type === 'leave')) surface.post({ over: e.type === 'enter' })
-    const span = Math.max(1, props.rows.length - 1)
+    const span = Math.max(1, (props.preview?.rows ?? props.rows.length) - 1)
     const onBar = Boolean(props.bar) && e.x >= surface.columns - 1
     if (props.bar && (cur.drag || (onBar && e.type === 'down' && (e.button ?? 'left') === 'left'))) {
       if (e.type === 'up' || e.type === 'leave') {

@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { LINUX_LAUNCH, TMUX_OPEN } from '../hooks/open'
+import { POSTER } from '../hooks/peek'
 import { age, ancestorsOf, formatSize, replaceChildren, toNodes } from '../hooks/tree'
 
 type World = {
@@ -1835,7 +1836,7 @@ test('split preview: the header button shows the file under the cursor below a r
     os: 'linux', env: { HOME: '/home/k', XDG_RUNTIME_DIR: '/run/user/1000' }, cwd: root, top: '', status: '', numstat: '',
     dirs: { [root]: [['a.ts', 'file'], ['b.png', 'file'], ['c.mp4', 'file']] },
     files: { [`${root}/a.ts`]: `const a = 1\n${'a++\n'.repeat(200)}` },
-    stdout: { 'od -An -tu1': PNG_HEAD },
+    stdout: { 'od -An -tu1': PNG_HEAD, [`sh -c ${POSTER}`]: '/run/user/1000/filetree-preview-1000/0123456789abcdef.png' },
   }, ran)
   await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
   await clock.settle()
@@ -1885,8 +1886,8 @@ test('split preview: the header button shows the file under the cursor below a r
   await clock.settle()
   await clock.settle()
   shown = JSON.stringify(await ui.drawn())
-  expect(shown).toContain('"file":"/run/user/1000/filetree-preview/')
-  expect(ran.some(a => a[0] === 'sh' && a.includes(`${root}/c.mp4`) && a.at(-1) === 'video')).toBe(true)
+  expect(shown).toContain('"file":"/run/user/1000/filetree-preview-1000/')
+  expect(ran.some(a => a[0] === 'sh' && a.includes(`${root}/c.mp4`) && a.includes('video') && a.includes('/run/user/1000'))).toBe(true)
   await ui.press({ key: 'split' })
   await clock.settle()
   shown = JSON.stringify(await ui.drawn())
@@ -1922,5 +1923,63 @@ test('split preview at the top: p shows it under the header with the rule below 
   await ui.post({ key: 'p' }, { in: 'rows' })
   await clock.settle()
   expect(JSON.stringify(await ui.drawn())).not.toContain('──')
+  await ui.unmount()
+})
+
+test('split preview: a scrollbar click lands mid-file, the wheel goes back to the tree once the file under it changes, a pipe is not read, a failed decoder says it failed, and a short pane leaves the split out', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.ts', 'file'], ['b.jpg', 'file'], ['fifo', 'other' as any]] },
+    files: { [`${root}/a.ts`]: `const a = 1\n${'a++\n'.repeat(200)}` },
+    exits: { sh: [4, 'magick: corrupt image'] },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await ui.post({ key: 'k' }, { in: 'rows' })
+  await ui.post({ key: 'p' }, { in: 'rows' })
+  await clock.settle()
+  await ui.pointer({ type: 'down', x: 59, y: 8, button: 'left', in: 'peek' })
+  await ui.pointer({ type: 'up', x: 59, y: 8, button: 'left', in: 'peek' })
+  await clock.settle()
+  const mid = peekOf(await ui.drawn()).preview.startLine
+  expect(mid).toBeGreaterThan(80)
+  expect(mid).toBeLessThan(120)
+  await ui.post({ over: true }, { in: 'peek' })
+  await ui.post({ key: 'j' }, { in: 'rows' })
+  await clock.settle()
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).toContain('could not decode: magick: corrupt image')
+  await ui.post({ key: 'k' }, { in: 'rows' })
+  await clock.settle()
+  await $.ui.scroll({ component: 'Pane', requestId: 'filetree', by: 1 } as any)
+  await clock.settle()
+  expect(peekOf(await ui.drawn()).preview.startLine).toBe(1)
+  await ui.post({ key: 'end' }, { in: 'rows' })
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).toContain('not a regular file')
+  await ui.unmount()
+  const short = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: { ...paneProps(60), scroll: { offset: 0, bodyRows: 16 } } })
+  await clock.settle()
+  expect(JSON.stringify(await short.drawn())).not.toContain('──')
+  await short.unmount()
+})
+
+test('split preview on desktop: p does nothing and Page Down still moves the tree', { timeoutMs: 20_000 }, async ($, on) => {
+  const root = '/Users/k/proj'
+  const names = Array.from({ length: 30 }, (_, i) => [`f${String(i).padStart(2, '0')}.txt`, 'file'] as [string, 'file'])
+  const clock = world(on, { os: 'darwin', env: { HOME: '/Users/k' }, cwd: root, top: '', status: '', numstat: '', dirs: { [root]: names } }, [])
+  await $.session.start({ cwd: root, surface: 'desktop', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'desktop', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await ui.post({ key: 'k' }, { in: 'rows' })
+  await ui.post({ key: 'p' }, { in: 'rows' })
+  await ui.post({ key: 'pagedown' }, { in: 'rows' })
+  await clock.settle()
+  const shown = JSON.stringify(await ui.drawn())
+  expect(shown).not.toContain('──')
+  expect(shown).toContain(`"active":"${root}/f10.txt"`)
   await ui.unmount()
 })

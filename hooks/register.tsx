@@ -1,7 +1,7 @@
 import { type BuiltinToolResults, type EngineInterface, type Register, type RenderElement, type Timer, update } from 'claude-code'
 import { herdrError, herdrOpenCommand, herdrPane, isBinaryPath, LINUX_LAUNCH, openCommand, openWithCommand, tmuxOpenCommand, words } from './open'
 import type { ButtonProps } from './button'
-import { cacheName, fitCells, pictureKind, pngSize, POSTER } from './peek'
+import { CACHE_KEEP, cacheName, EXIT_FAILED, EXIT_MISSING, fitCells, PNG_DIRECT_BYTES, PNG_DIRECT_PIXELS, pictureKind, pngSize, POSTER } from './peek'
 
 import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
@@ -101,8 +101,11 @@ let peekPath = ''
 let peekRows = 8
 let peekTop = 0
 let overPeek = false
-let pictureDir = ''
-const pictures = new Map<string, Picture>()
+let pictureBase = ''
+let splitShown = false
+let converting = false
+let nextJob: PictureJob | null = null
+const pictures = new Map<string, { sig: string; picture: Picture }>()
 let follow = true
 let followClaude = true
 let scanning: Promise<void> | null = null
@@ -141,6 +144,7 @@ const unreadable = new Set<string>()
 const background = new Map<string, Background>()
 
 type Preview = { path: string; text: string; note: string; diff?: DiffLine[] }
+type PictureJob = { path: string; kind: 'png' | 'image' | 'video'; sig: string; mtime: number; size: number }
 type Picture = { state: 'pending' } | { state: 'ready'; file: string; generation: number; width: number; height: number } | { state: 'failed'; note: string }
 
 function osName($: EngineInterface): Promise<'linux' | 'darwin' | 'win32'> {
@@ -968,7 +972,8 @@ async function readPreview($: EngineInterface, path: string): Promise<Preview> {
   let note = ''
   try {
     const stat = await $.fs.stat(path)
-    if (stat.size > 4_000_000) note = `${formatSize(stat.size)}, too large to preview`
+    if (stat.kind !== 'file') note = 'not a regular file'
+    else if (stat.size > 4_000_000) note = `${formatSize(stat.size)}, too large to preview`
     else {
       text = await $.fs.read(path)
       if (text.slice(0, 8000).includes('\0')) {
@@ -1049,21 +1054,51 @@ async function pngHeader($: EngineInterface, file: string): Promise<{ width: num
   return run.exitCode === 0 ? pngSize(Uint8Array.from(run.stdout.trim().split(/\s+/).map(Number))) : null
 }
 
-async function makePicture($: EngineInterface, path: string, kind: 'png' | 'image' | 'video', key: string, mtime: number): Promise<Picture> {
+async function makePicture($: EngineInterface, job: PictureJob): Promise<Picture> {
   try {
     if ((await osName($)) === 'win32') return { state: 'failed', note: 'image preview needs Linux or macOS' }
-    let file = path
-    let size = kind === 'png' ? await pngHeader($, path) : null
+    let file = job.path
+    let size = job.kind === 'png' && job.size <= PNG_DIRECT_BYTES ? await pngHeader($, job.path) : null
+    if (size && (size.width > PNG_DIRECT_PIXELS || size.height > PNG_DIRECT_PIXELS)) size = null
     if (!size) {
-      file = `${pictureDir}/${key}`
-      const made = await $.process.run(['sh', '-c', POSTER, 'sh', path, file, kind === 'video' ? 'video' : 'image'], { timeoutMs: 30_000 })
-      if (made.exitCode !== 0) return { state: 'failed', note: made.stderr.trim().split('\n')[0] || `could not decode, exit ${made.exitCode}` }
+      const made = await $.process.run(['sh', '-c', POSTER, 'sh', job.path, pictureBase, job.sig, job.kind === 'video' ? 'video' : 'image', String(CACHE_KEEP)], { timeoutMs: 30_000 })
+      const why = made.stderr.trim().split('\n').filter(Boolean)[0] ?? ''
+      if (made.exitCode === EXIT_MISSING) return { state: 'failed', note: why || 'no decoder on PATH' }
+      if (made.exitCode === EXIT_FAILED) return { state: 'failed', note: `could not decode${why ? `: ${why}` : ''}` }
+      if (made.exitCode !== 0 || !made.stdout.trim().startsWith('/')) return { state: 'failed', note: why || `could not decode, exit ${made.exitCode}` }
+      file = made.stdout.trim()
       size = await pngHeader($, file)
     }
-    return size ? { state: 'ready', file, generation: Math.floor(mtime), ...size } : { state: 'failed', note: 'could not read the picture size' }
+    return size ? { state: 'ready', file, generation: Math.floor(job.mtime), ...size } : { state: 'failed', note: 'could not read the picture size' }
   } catch (err) {
     return { state: 'failed', note: String((err as Error)?.message ?? err).split('\n')[0] ?? 'could not decode' }
   }
+}
+
+function forget($: EngineInterface, path: string): void {
+  const old = pictures.get(path)
+  pictures.delete(path)
+  if (old?.picture.state === 'ready' && old.picture.file !== path) void $.process.run(['rm', '-f', '--', old.picture.file], { timeoutMs: 5_000 }).catch(() => undefined)
+}
+
+async function convert($: EngineInterface, job: PictureJob): Promise<void> {
+  if (converting) {
+    if (nextJob && pictures.get(nextJob.path)?.sig === nextJob.sig) pictures.delete(nextJob.path)
+    nextJob = job
+    return
+  }
+  converting = true
+  let cur: PictureJob | null = job
+  while (cur) {
+    const made = await makePicture($, cur)
+    const entry = pictures.get(cur.path)
+    if (entry?.sig === cur.sig) entry.picture = made
+    else if (made.state === 'ready' && made.file !== cur.path) void $.process.run(['rm', '-f', '--', made.file], { timeoutMs: 5_000 }).catch(() => undefined)
+    void $.ui.invalidate('ui.render')
+    cur = nextJob
+    nextJob = null
+  }
+  converting = false
 }
 
 async function picture($: EngineInterface, path: string): Promise<Picture | null> {
@@ -1071,14 +1106,21 @@ async function picture($: EngineInterface, path: string): Promise<Picture | null
   if (!kind) return null
   const stat = await $.fs.stat(path).catch(() => null)
   if (!stat) return { state: 'failed', note: 'could not read' }
-  const key = cacheName(path, stat.mtimeMs, stat.size)
-  const known = pictures.get(key)
-  if (known) return known
-  pictures.set(key, { state: 'pending' })
-  void makePicture($, path, kind, key, stat.mtimeMs).then(p => {
-    pictures.set(key, p)
-    void $.ui.invalidate('ui.render')
-  })
+  if (stat.kind !== 'file') return { state: 'failed', note: 'not a regular file' }
+  const sig = cacheName(path, stat.mtimeMs, stat.size)
+  const known = pictures.get(path)
+  if (known?.sig === sig) {
+    pictures.delete(path)
+    pictures.set(path, known)
+    return known.picture
+  }
+  if (known) forget($, path)
+  pictures.set(path, { sig, picture: { state: 'pending' } })
+  for (const old of pictures.keys()) {
+    if (pictures.size <= CACHE_KEEP) break
+    forget($, old)
+  }
+  void convert($, { path, kind, sig, mtime: stat.mtimeMs, size: stat.size })
   return { state: 'pending' }
 }
 
@@ -1248,8 +1290,8 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   }
   const page = Math.max(1, peekRows - 1)
   const peek: Record<string, number> = { f: page, b: -page, pageup: -page, pagedown: page }
-  if (key === 'p') await toggleSplit($)
-  else if (t.split && key in peek) scrollSplit($, peekTop + (peek[key] ?? 0))
+  if (key === 'p' && surface !== 'desktop') await toggleSplit($)
+  else if (t.split && splitShown && surface !== 'desktop' && key in peek) scrollSplit($, peekTop + (peek[key] ?? 0))
   else if (key === 'up' || key === 'k') await move(-1)
   else if (key === 'down' || key === 'j') await move(1)
   else if (key === 'pageup') await move(-10)
@@ -1334,7 +1376,7 @@ export const register: Register = (on, options) => {
     useDrives(windows)
     inTmux = !windows && Boolean(await $.env.get('TMUX'))
     inHerdr = !windows && Boolean(await $.env.get('HERDR_ENV'))
-    pictureDir = `${((await $.env.get('XDG_RUNTIME_DIR')) || (await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '')}/filetree-preview`
+    pictureBase = ((await $.env.get('XDG_RUNTIME_DIR')) || (await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '') || '/'
     home = posix(((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/[\\/]+$/, ''))
     activityId = Math.max(activityId, ...(await activities($)).map(a => a.id))
     void (async () => {
@@ -1660,7 +1702,11 @@ export const register: Register = (on, options) => {
     const width = Math.max(24, e.props.bodyColumns)
     const rows = visibleRows(t)
     const body = e.props.scroll?.bodyRows ?? 40
-    const splitRows = t.split && !nativeScroll ? Math.max(6, Math.min(Math.floor(body * 0.45), body - 10)) : 0
+    const chrome = 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
+    const spare = body - chrome - 5
+    const splitRows = t.split && !nativeScroll && spare >= 6 ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
+    splitShown = splitRows > 0
+    if (!splitShown) overPeek = false
     const fixed = splitRows + 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
     const room = nativeScroll ? Math.max(1, rows.length) : Math.max(5, (e.props.scroll?.bodyRows ?? 40) - fixed)
     const isLit = (id: string) => bright.has(id) || dimmed.has(id)
@@ -1838,11 +1884,13 @@ export const register: Register = (on, options) => {
         peekPath = target
         peeked = null
         peekTop = 0
+        overPeek = false
       }
       let start = peekTop
       const rule = <Text key="peek-rule" color={theme.muted}>{'─'.repeat(Math.max(1, e.props.bodyColumns))}</Text>
       const name = target ? (inside(t.root, target) ? relative(t.root, target) : shortPath(target)) : ''
       const pic = target ? await picture($, target) : null
+      if (!target || pic) overPeek = false
       let content: RenderElement
       let status = ''
       if (!target) content = <Text color={theme.muted}>no file selected</Text>
@@ -1862,6 +1910,7 @@ export const register: Register = (on, options) => {
         status = peeked.text ? `${start + 1}–${Math.min(lines.length, start + peekRows)}/${lines.length}` : ''
         const size = Math.max(1, Math.round((peekRows * peekRows) / Math.max(1, lines.length)))
         const bar = lines.length > peekRows ? { pos: last ? Math.round((start / last) * (peekRows - size)) : 0, size, thumb: theme.accent, track: theme.muted } : undefined
+        if (!peeked.text) overPeek = false
         content = peeked.text
           ? <Client key="peek" module="./rows.tsx" props={{ rows: [], active: '', ...rowColors, pointer, ...(bar ? { bar } : {}), preview: { text: win.text, path: target, startLine: win.top + 1, markdown, rows: peekRows } } satisfies RowsProps} />
           : <Text color={theme.muted}>{peeked.note || 'empty file'}</Text>
