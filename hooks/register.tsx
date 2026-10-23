@@ -1017,7 +1017,7 @@ async function readPreview($: EngineInterface, path: string): Promise<Preview> {
   }
   const total = text.length
   let lines = text.slice(0, PREVIEW_CHARS).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').split('\n')
-  if (total > PREVIEW_CHARS && lines.length > 1) lines.pop()
+  if (lines.length > 1 && (total > PREVIEW_CHARS || lines.at(-1) === '')) lines.pop()
   lines = lines.map(l => (l.length > PREVIEW_LINE ? `${l.slice(0, PREVIEW_LINE)}…` : l))
   const fit = fitSerialized(lines, PREVIEW_CHARS)
   if (total > PREVIEW_CHARS || fit.length < lines.length) note = `first ${fit.length.toLocaleString('en')} lines of ${total.toLocaleString('en')} characters`
