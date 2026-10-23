@@ -7,6 +7,7 @@ import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
 import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
+import { draw, gray, layout, mix, parseDu, REST, type Tile, type Usage } from './treemap'
 import { ADD_COLOR, DEL_COLOR, LIGHT_ADD_COLOR, LIGHT_DEL_COLOR, LIGHT_HOVER, type Palette, parsePalette } from './palette'
 import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR, LIGHT_GIT_COLOR } from './icons'
 import {
@@ -92,6 +93,7 @@ let diffWithSetting = ''
 let palette: Palette = parsePalette('')
 let inTmux = false
 let inHerdr = false
+let coarse = false
 let previewLine = 1
 let previewed: Preview | null = null
 let previewRows = 20
@@ -146,6 +148,14 @@ const unreadable = new Set<string>()
 const background = new Map<string, Background>()
 
 type Preview = { path: string; text: string; note: string; diff?: DiffLine[] }
+type Scan = { dir: string; items: Usage[]; total: number; done: boolean; stale: boolean; stopped: boolean; stop: () => void }
+const scans = new Map<string, Scan>()
+let mapLock: { anchor: string; pick: string; cursor: string } | null = null
+let mapAnchor = ''
+const SCAN_KEEP = 24
+const STALE_MS = 1500
+const staleQueue = new Set<string>()
+let staleTimer: Timer | null = null
 type PictureJob = { path: string; kind: 'png' | 'image' | 'video'; sig: string; mtime: number; size: number }
 type Picture = { state: 'pending' } | { state: 'ready'; file: string; generation: number; width: number; height: number } | { state: 'failed'; note: string }
 
@@ -833,6 +843,7 @@ function scheduleScan($: EngineInterface, job: Job): void {
 async function touched($: EngineInterface, paths: string[], tone: string, show: boolean): Promise<void> {
   if (tone !== 'purple' && previewed && paths.map(posix).includes(previewed.path)) previewed = null
   if (tone !== 'purple' && peeked && paths.map(posix).includes(peeked.path)) peeked = null
+  if (tone !== 'purple') markStale($, paths)
   if (await followCwd($)) return
   const t = await get($)
   if (!t.root) return
@@ -1130,6 +1141,112 @@ async function picture($: EngineInterface, path: string): Promise<Picture | null
   return { state: 'pending' }
 }
 
+function stopScans(keep = ''): void {
+  for (const scan of scans.values()) {
+    if (scan.done || scan.dir === keep) continue
+    scan.stopped = true
+    scan.stop()
+    scans.delete(scan.dir)
+  }
+}
+
+function usageOf($: EngineInterface, dir: string): Scan {
+  const known = scans.get(dir)
+  if (known && (!known.stale || !known.done)) {
+    scans.delete(dir)
+    scans.set(dir, known)
+    return known
+  }
+  const scan: Scan = { dir, items: known?.items ?? [], total: known?.total ?? 0, done: false, stale: false, stopped: false, stop: () => undefined }
+  scans.delete(dir)
+  scans.set(dir, scan)
+  for (const [old, s] of scans) if (scans.size > SCAN_KEEP && s.done) scans.delete(old)
+  void runScan($, scan, Boolean(known))
+  return scan
+}
+
+async function runScan($: EngineInterface, scan: Scan, seeded: boolean): Promise<void> {
+  let out: Usage[] = seeded ? [] : scan.items
+  let total = 0
+  try {
+    if ((await osName($)) === 'win32') {
+      for (const entry of await $.fs.list(scan.dir)) {
+        if (scan.stopped) return
+        const path = join(scan.dir, entry.name)
+        out.push({ path, name: entry.name, bytes: entry.kind === 'dir' && !entry.isLink ? Math.max(0, await walkSize($, path)) : entry.kind === 'file' ? entry.size : 0 })
+        if (!seeded) void $.ui.invalidate('ui.render')
+      }
+    } else {
+      const stream = $.process.spawn({ argv: ['du', '-akxH', '-d', '2', '--', scan.dir] })
+      scan.stop = () => void stream.return(undefined as never).catch(() => undefined)
+      let text = ''
+      for await (const chunk of stream) {
+        if (scan.stopped) return
+        if (chunk.stream !== 'stdout') continue
+        text += chunk.text
+        const got = parseDu(text.slice(0, text.lastIndexOf('\n') + 1), scan.dir)
+        out = got.items
+        if (!seeded) {
+          scan.items = out
+          void $.ui.invalidate('ui.render')
+        }
+      }
+      if (scan.stopped) return
+      const got = parseDu(text, scan.dir)
+      out = got.items
+      total = got.total ?? 0
+    }
+  } catch {
+    if (scan.stopped) return
+  }
+  scan.items = out
+  scan.total = total || out.reduce((a, u) => a + u.bytes, 0)
+  scan.done = true
+  void $.ui.invalidate('ui.render')
+}
+
+async function mapUp($: EngineInterface, anchor: string): Promise<void> {
+  const t = await get($)
+  mapLock = { anchor: dirname(anchor), pick: anchor, cursor: t.cursor }
+  void $.ui.invalidate('ui.render')
+}
+
+function markStale($: EngineInterface, paths: string[]): void {
+  for (const p of paths) staleQueue.add(posix(p))
+  if (staleTimer) return
+  staleTimer = $.clock.after(STALE_MS, () => {
+    staleTimer = null
+    const hit = [...staleQueue]
+    staleQueue.clear()
+    let any = false
+    for (const scan of scans.values()) {
+      if (!hit.some(p => inside(scan.dir, p))) continue
+      scan.stale = true
+      any = true
+    }
+    if (any) void $.ui.invalidate('ui.render')
+  })
+}
+
+async function pickTile($: EngineInterface, id: string): Promise<void> {
+  if (id.startsWith(REST)) return
+  const t = await get($)
+  const node = t.nodes.find(n => n.id === id)
+  if (mapLock?.pick === id) {
+    if (node?.kind === 'dir' || !node) {
+      const kind = node?.kind ?? (await $.fs.stat(id).then(s => s.kind, () => 'file'))
+      if (kind === 'dir') mapLock = { anchor: id, pick: '', cursor: t.cursor }
+    }
+    void $.ui.invalidate('ui.render')
+    return
+  }
+  const shows = inside(t.root, id) && !isIgnored(t.root, id) && (t.showHidden || !id.slice(id.lastIndexOf('/') + 1).startsWith('.'))
+  mapLock = { anchor: mapAnchor, pick: id, cursor: shows ? id : t.cursor }
+  if (!shows) return void $.ui.invalidate('ui.render')
+  await patch($, cur => ({ expanded: [...new Set([...cur.expanded, ...ancestorsOf(id, cur.root)])], cursor: id, scroll: null }))
+  await revealPaths($, [id])
+}
+
 async function toggleSplit($: EngineInterface): Promise<void> {
   overPeek = false
   peekTop = 0
@@ -1146,7 +1263,7 @@ function scrollSplit($: EngineInterface, to: number): void {
 
 function peekTarget(t: FileTree): string {
   const cur = t.nodes.find(n => n.id === t.cursor)
-  if (cur && cur.kind !== 'dir') return cur.id
+  if (cur) return cur.kind === 'dir' ? '' : cur.id
   const sel = t.selected ? t.nodes.find(n => n.id === t.selected) : undefined
   return sel && sel.kind !== 'dir' ? sel.id : ''
 }
@@ -1339,6 +1456,7 @@ async function pressHeader($: EngineInterface, id: string): Promise<void> {
     await reset($, await cwdOf($))
   } else if (id === 'refresh') {
     searchIndex = null
+    for (const scan of scans.values()) scan.stale = true
     await staleSizes($)
     await loadDirs($, [t.root, ...t.expanded])
     await detectRepo($)
@@ -1382,6 +1500,8 @@ export const register: Register = (on, options) => {
     useDrives(windows)
     inTmux = !windows && Boolean(await $.env.get('TMUX'))
     inHerdr = !windows && Boolean(await $.env.get('HERDR_ENV'))
+    const colorterm = ((await $.env.get('COLORTERM')) ?? '').toLowerCase()
+    coarse = !windows && ((inTmux && !(await $.env.get('CLAUDE_CODE_TMUX_TRUECOLOR'))) || (colorterm !== 'truecolor' && colorterm !== '24bit'))
     pictureSession = (await $.session.id()).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'session'
     pictureBase = ((await $.env.get('XDG_RUNTIME_DIR')) || (await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '') || '/'
     home = posix(((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/[\\/]+$/, ''))
@@ -1535,7 +1655,11 @@ export const register: Register = (on, options) => {
       }
       return {}
     }
-    if (e.requestId !== PANE || e.element !== 'rows' || !e.data || typeof e.data !== 'object') return next(e)
+    if (e.requestId === PANE && e.element === 'treemap' && e.data && typeof (e.data as { tab?: unknown }).tab === 'string') {
+      await pickTile($, (e.data as { tab: string }).tab)
+      return {}
+    }
+    if (e.requestId !== PANE || (e.element !== 'rows' && e.element !== 'treemap') || !e.data || typeof e.data !== 'object') return next(e)
     const data = e.data as { press?: unknown; key?: unknown; ctrl?: unknown; shift?: unknown; scrollTo?: unknown; copy?: unknown }
     void sync($)
     const t = await get($)
@@ -1890,9 +2014,16 @@ export const register: Register = (on, options) => {
     }
 
     const peek = async () => {
-      if (!splitRows) return null
+      if (!splitRows) {
+        stopScans()
+        return null
+      }
       peekRows = splitRows - 2
-      const target = peekTarget(t)
+      const lock = mapLock && mapLock.cursor === t.cursor ? mapLock : null
+      mapLock = lock
+      const target = lock ? '' : peekTarget(t)
+      const anchor = target ? '' : (lock?.anchor ?? (t.nodes.find(n => n.id === t.cursor)?.kind === 'dir' ? t.cursor : t.root))
+      stopScans(anchor)
       if (target !== peekPath) {
         peekPath = target
         peeked = null
@@ -1901,12 +2032,38 @@ export const register: Register = (on, options) => {
       }
       let start = peekTop
       const rule = <Text key="peek-rule" color={theme.muted}>{'─'.repeat(Math.max(1, e.props.bodyColumns))}</Text>
-      const name = target ? (inside(t.root, target) ? relative(t.root, target) : shortPath(target)) : ''
+      const shown = target || anchor
+      const name = shown ? (shown !== t.root && inside(t.root, shown) ? relative(t.root, shown) : shortPath(shown)) : ''
       const pic = target ? await picture($, target) : null
       if (!target || pic) overPeek = false
       let content: RenderElement
       let status = ''
-      if (!target) content = <Text color={theme.muted}>no file selected</Text>
+      if (!target && anchor) {
+        mapAnchor = anchor
+        const scan = usageOf($, anchor)
+        const cols = Math.max(8, e.props.bodyColumns - 1)
+        const tiles = layout(scan.items, cols, peekRows)
+        const total = scan.done ? scan.total : scan.items.reduce((a, u) => a + u.bytes, 0)
+        const lit = t.flashOn ? t.flash : []
+        const pick = tiles.find(x => x.path === lock?.pick)
+        const ground = theme.bg || (light ? '#ffffff' : '#1e1e2e')
+        const pct = (bytes: number) => `${total ? Math.max(bytes ? 1 : 0, Math.round((bytes / total) * 100)) : 0}%`
+        const look = (tile: Tile) => {
+          const hot = lit.find(f => inside(tile.path, f))
+          const tone = hot ? (tones[t.flashTones[hot] ?? 'orange']?.solid ?? theme.accent) : ''
+          const picked = tile === pick
+          const dim = tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
+          const share = total ? tile.bytes / total : 0
+          const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
+          const bg = picked ? (coarse ? gray(ground, 9) : mix(ground, theme.accent, 0.5)) : tone ? (coarse ? tone : mix(ground, tone, 0.4)) : coarse ? gray(ground, level + 1) : mix(ground, theme.accent, 0.04 + 0.08 * level)
+          const ink = tone && coarse ? ground : theme.fg || (light ? '#000000' : '#ffffff')
+          return { border: tone || (picked ? theme.accent : theme.muted), name: dim && !tone && !picked ? theme.muted : ink, size: ink, bold: picked || Boolean(tone) || tile.depth === 0, bg, rank: picked ? 2 : tone ? 1 : 0 }
+        }
+        status = pick ? `${pick.name} ${formatSize(pick.bytes)} ${pct(pick.bytes)}` : `${formatSize(total)}${scan.done ? '' : ' …'}`
+        content = tiles.length
+          ? <Client key="treemap" module="./rows.tsx" props={{ rows: draw(tiles, cols, peekRows, look, x => `${formatSize(x.bytes)} ${pct(x.bytes)}`), active: '', ...rowColors, pointer } satisfies RowsProps} />
+          : <Text color={theme.muted}>{scan.done ? 'empty' : 'sizing…'}</Text>
+      } else if (!target) content = <Text color={theme.muted}>no file selected</Text>
       else if (pic) {
         if (pic.state === 'ready' && Image) {
           const fit = fitCells(pic, Math.max(1, e.props.bodyColumns - 1), peekRows)
@@ -1931,7 +2088,11 @@ export const register: Register = (on, options) => {
       const title = (
         <Box key="peek-title" flexDirection="row" height={1} overflow="hidden">
           <Box flexShrink={1} flexGrow={1} overflow="hidden">
-            <Text bold wrap="truncate-start">{name}</Text>
+            {anchor && anchor !== t.root && !target ? (
+              <Button key="map-up" plain label={`${glyphSetting === 'text' ? 'up ' : unicode ? '↑ ' : '\u{eaa1} '}${name}`} onPress={() => void mapUp($, anchor)} />
+            ) : (
+              <Text bold wrap="truncate-start">{name}</Text>
+            )}
           </Box>
           {status ? <Text color={theme.muted}>{` ${status}`}</Text> : null}
           {peeked?.note && peeked.text && !pic ? <Text color={theme.muted}>{' · partial'}</Text> : null}
