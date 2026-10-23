@@ -37,7 +37,6 @@ import {
   visibleRows,
 } from './tree'
 
-const TREE = { plugin: 'filetree', key: 'tree' } as const
 const THEME = { plugin: 'filetree', key: 'theme' } as const
 const ACTIVITY = { plugin: 'filetree', key: 'activity' } as const
 const PANE = 'filetree'
@@ -72,6 +71,7 @@ const SIZE_WALK_LIMIT = 50_000
 const AGE_TICK_MS = 60_000
 
 let blink: Timer | null = null
+let cached: FileTree | null = null
 let themePoll: Timer | null = null
 let gitPoll: Timer | null = null
 let gitStamp: string | null = null
@@ -165,12 +165,14 @@ async function readThemeSetting($: EngineInterface): Promise<void> {
   void $.ui.invalidate('ui.render')
 }
 
-async function get($: EngineInterface): Promise<FileTree> {
-  return { ...emptyTree(''), ...(await $.state.get(TREE)).value }
+async function get(_$: EngineInterface): Promise<FileTree> {
+  cached ??= emptyTree('')
+  return cached
 }
 
 async function put($: EngineInterface, fn: (t: FileTree) => FileTree): Promise<void> {
-  await update($, TREE, cur => fn({ ...emptyTree(''), ...cur }))
+  cached = fn(cached ?? emptyTree(''))
+  await $.ui.invalidate('ui.render')
 }
 
 function patch($: EngineInterface, fn: (t: FileTree) => Partial<FileTree>) {
@@ -1245,6 +1247,7 @@ export const register: Register = (on, options) => {
   diffWithSetting = typeof options?.diff === 'string' ? options.diff.trim() : ''
   noDock = options?.start === 'off'
   on('session.start', async ($, e, next) => {
+    cached = null
     await $.command.register({ name: 'filetree', description: 'Show or hide the file tree; args: [path | open] (no path = cwd, open = never hide)' })
     if (palette.unknown.length) void $.ui.toast(`filetree palette: ignored ${palette.unknown.join(' ')}; use key=#hex with fg, bg, accent, muted, urgent, selection, hover, added, modified, renamed, add or del`)
     const windows = (await $.env.get('OS')) === 'Windows_NT'
@@ -1425,6 +1428,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
+    cached = null
     const result = await next(e)
     if (e.reason === 'clear' || e.reason === 'resume' || e.reason === 'other') $.clock.after(0, () => void settleRoot($))
     return result
