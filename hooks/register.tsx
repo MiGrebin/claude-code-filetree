@@ -2057,7 +2057,7 @@ export const register: Register = (on, options) => {
           const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
           const bg = picked ? (coarse ? gray(ground, 9) : mix(ground, theme.accent, 0.5)) : tone ? (coarse ? tone : mix(ground, tone, 0.4)) : coarse ? gray(ground, level + 1) : mix(ground, theme.accent, 0.04 + 0.08 * level)
           const ink = tone && coarse ? ground : theme.fg || (light ? '#000000' : '#ffffff')
-          return { border: tone || (picked ? theme.accent : theme.muted), name: dim && !tone && !picked ? theme.muted : ink, size: ink, bold: picked || Boolean(tone) || tile.depth === 0, bg, rank: picked ? 2 : tone ? 1 : 0 }
+          return { name: dim && !tone && !picked ? theme.muted : ink, size: ink, bold: picked || Boolean(tone) || tile.depth === 0, bg, rank: picked ? 2 : tone ? 1 : 0 }
         }
         status = pick ? `${pick.name} ${formatSize(pick.bytes)} ${pct(pick.bytes)}` : `${formatSize(total)}${scan.done ? '' : ' …'}`
         content = tiles.length

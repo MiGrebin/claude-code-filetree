@@ -2,23 +2,14 @@ import type { RowSpec, Seg } from './rows'
 
 export type Usage = { path: string; name: string; bytes: number; kids?: Usage[] }
 export type Tile = { path: string; name: string; bytes: number; x0: number; y0: number; x1: number; y1: number; depth: number; parent?: Tile; nested: boolean }
-export type TileLook = { border: string; name: string; size: string; bold: boolean; bg?: string; rank: number }
+export type TileLook = { name: string; size: string; bold: boolean; bg?: string; rank: number }
 
 export const REST = '#rest'
 export const CELL_ASPECT = 2
 const MIN_AREA = 7 * 2 * CELL_ASPECT * 1.5
 const MAX_TILES = 60
 const NEST_COLUMNS = 12
-const NEST_ROWS = 5
-const U = 1
-const D = 2
-const L = 4
-const R = 8
-const BOX: Record<number, string> = {
-  [U]: '│', [D]: '│', [U | D]: '│', [L]: '─', [R]: '─', [L | R]: '─',
-  [D | R]: '╭', [D | L]: '╮', [U | R]: '╰', [U | L]: '╯',
-  [U | D | R]: '├', [U | D | L]: '┤', [L | R | D]: '┬', [L | R | U]: '┴', [U | D | L | R]: '┼',
-}
+const NEST_ROWS = 6
 
 export function parseDu(text: string, dir: string): { total?: number; items: Usage[] } {
   const top = new Map<string, Usage>()
@@ -118,7 +109,7 @@ function place(usage: Usage[], x0: number, y0: number, x1: number, y1: number, p
     if (!r) return []
     const tile: Tile = { path: u.path, name: u.name, bytes: u.bytes, x0: x0 + Math.round(r.x), x1: x0 + Math.round(r.x + r.w), y0: y0 + Math.round(r.y / CELL_ASPECT), y1: y0 + Math.round((r.y + r.h) / CELL_ASPECT), depth: parent ? parent.depth + 1 : 0, nested: false, ...(parent ? { parent } : {}) }
     if (tile.x1 <= tile.x0 || tile.y1 <= tile.y0) return []
-    const inner = !parent && u.kids?.length && tile.x1 - tile.x0 >= NEST_COLUMNS && tile.y1 - tile.y0 >= NEST_ROWS ? place(u.kids, tile.x0, tile.y0 + 2, tile.x1, tile.y1, tile) : []
+    const inner = !parent && u.kids?.length && tile.x1 - tile.x0 >= NEST_COLUMNS && tile.y1 - tile.y0 >= NEST_ROWS ? place(u.kids, tile.x0, tile.y0 + 3, tile.x1, tile.y1, tile) : []
     tile.nested = inner.length > 0
     return [tile, ...inner]
   })
@@ -128,13 +119,7 @@ export function layout(usage: Usage[], columns: number, rows: number): Tile[] {
   return place(usage, 0, 0, columns - 1, rows - 1)
 }
 
-function fit(s: string, n: number): string {
-  const chars = [...s]
-  return chars.length <= n ? s : `${chars.slice(0, Math.max(0, n - 1)).join('')}…`
-}
-
 export function draw(tiles: Tile[], columns: number, rows: number, look: (t: Tile) => TileLook, label: (t: Tile) => string): RowSpec[] {
-  const bits = Array.from({ length: rows }, () => new Array<number>(columns).fill(0))
   const text = Array.from({ length: rows }, () => new Array<string>(columns).fill(' '))
   const style = Array.from({ length: rows }, () => new Array<Omit<Seg, 't'>>(columns).fill({}))
   const owner = Array.from({ length: rows }, () => new Array<number>(columns).fill(-1))
@@ -146,38 +131,35 @@ export function draw(tiles: Tile[], columns: number, rows: number, look: (t: Til
     const p = t.parent
     const pbg = p ? looks.get(p)?.bg : undefined
     const within = (x: number, y: number) => p !== undefined && x > p.x0 && x < p.x1 && y > p.y0 && y < p.y1
-    const cell = (x: number, y: number, st: Omit<Seg, 't'>, ch?: string, bit = 0, rank = Infinity) => {
+    const cell = (x: number, y: number, st: Omit<Seg, 't'>, ch?: string, rank = Infinity) => {
       if (y < 0 || y >= rows || x < 0 || x >= columns) return
-      if (bit) (bits[y] as number[])[x] = ((bits[y] as number[])[x] ?? 0) | bit
       if (ch !== undefined) (text[y] as string[])[x] = ch
       if (rank < ((owner[y] as number[])[x] ?? -1)) return
       if (rank !== Infinity) (owner[y] as number[])[x] = rank
       ;(style[y] as Omit<Seg, 't'>[])[x] = st
     }
-    const edge = (x: number, y: number) => {
-      const bg = within(x, y) ? pbg : undefined
-      return { c: lk.border, tab, ...(bg ? { bg } : {}) }
-    }
-    for (let x = t.x0; x <= t.x1; x++) for (const y of [t.y0, t.y1]) cell(x, y, edge(x, y), undefined, (x > t.x0 ? L : 0) | (x < t.x1 ? R : 0), lk.rank)
-    for (let y = t.y0; y <= t.y1; y++) for (const x of [t.x0, t.x1]) cell(x, y, edge(x, y), undefined, (y > t.y0 ? U : 0) | (y < t.y1 ? D : 0), lk.rank)
+    const gap = (x: number, y: number) => (within(x, y) && pbg ? { bg: pbg, tab: p?.path } : {})
+    for (let x = t.x0; x <= t.x1; x++) for (const y of [t.y0, t.y1]) cell(x, y, gap(x, y), ' ', lk.rank)
+    for (let y = t.y0; y <= t.y1; y++) for (const x of [t.x0, t.x1]) cell(x, y, gap(x, y), ' ', lk.rank)
     const fill = lk.bg ? { bg: lk.bg } : {}
     for (let y = t.y0 + 1; y < t.y1; y++) for (let x = t.x0 + 1; x < t.x1; x++) cell(x, y, { ...fill, tab }, ' ')
-    const inner = t.x1 - t.x0 - 1
-    if (inner < 1 || t.y1 - t.y0 < 2) continue
+    const room = t.x1 - t.x0 - 3
+    const lines = t.y1 - t.y0 - 2
     const size = label(t)
+    const name = [...t.name].length
+    const sized = [...size].length
+    if (lines < 1 || name > room) continue
     const nameSt = { c: lk.name, b: lk.bold, ...fill, tab }
     const sizeSt = { c: lk.size, ...fill, tab }
-    const width = [...t.name].length
     const parts: [number, number, string, Omit<Seg, 't'>][] =
-      width + 1 + [...size].length <= inner ? [[t.y0 + 1, 0, t.name, nameSt], [t.y0 + 1, width + 1, size, sizeSt]]
-      : !t.nested && t.y1 - t.y0 > 2 ? [[t.y0 + 1, 0, fit(t.name, inner), nameSt], [t.y0 + 2, 0, fit(size, inner), sizeSt]]
-      : [[t.y0 + 1, 0, fit(t.name, inner), nameSt]]
-    for (const [y, from, s, st] of parts) [...s].forEach((ch, i) => cell(t.x0 + 1 + from + i, y, st, ch))
+      name + 1 + sized <= room ? [[t.y0 + 2, 0, t.name, nameSt], [t.y0 + 2, name + 1, size, sizeSt]]
+      : !t.nested && lines >= 2 && sized <= room ? [[t.y0 + 2, 0, t.name, nameSt], [t.y0 + 3, 0, size, sizeSt]]
+      : [[t.y0 + 2, 0, t.name, nameSt]]
+    for (const [y, from, s, st] of parts) [...s].forEach((ch, i) => cell(t.x0 + 2 + from + i, y, st, ch))
   }
-  return bits.map((row, y) => {
+  return text.map((row, y) => {
     const segs: Seg[] = []
-    row.forEach((b, x) => {
-      const ch = b ? (BOX[b] ?? ' ') : (text[y]?.[x] ?? ' ')
+    row.forEach((ch, x) => {
       const st = style[y]?.[x] ?? {}
       const last = segs[segs.length - 1]
       if (last && last.c === st.c && last.bg === st.bg && Boolean(last.b) === Boolean(st.b) && last.tab === st.tab) last.t += ch
