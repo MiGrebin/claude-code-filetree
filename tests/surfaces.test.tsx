@@ -123,6 +123,13 @@ function world(on: any, w: World, ran: Ran) {
     }
     return ok('')
   })
+  on('process.spawn', async function* (_$: any, e: any) {
+    const argv: string[] = [...e.argv]
+    ran.push(argv)
+    const out = argv[0] === 'du' ? (w.du?.[argv.at(-1) ?? ''] ?? '') : ''
+    if (out) yield { stream: 'stdout', text: out }
+    return { value: { code: 0, signal: null } }
+  } as any)
   on('tool.call', (_$: any, e: any) => (w.tool?.(e) ?? { result: { stdout: '', stderr: '' } }) as any)
   on('prompt.submit', (_$: any, e: any) => ({ text: e.text, context: e.context }))
   return clock
@@ -1847,7 +1854,7 @@ test('split preview: the header button shows the file under the cursor below a r
   await clock.settle()
   let shown = JSON.stringify(await ui.drawn())
   expect(shown).toContain('──')
-  expect(shown).toContain('no file selected')
+  expect(shown).toContain('empty')
   await ui.post({ key: 'k' }, { in: 'rows' })
   await clock.settle()
   let peek = peekOf(await ui.drawn())
@@ -2024,4 +2031,59 @@ test('split preview: a cached picture another session pruned is decoded again, a
   await $.session.end({ reason: 'other', sessionId: 'test-session' } as any)
   await clock.settle()
   expect(ran).toContainEqual(['sh', '-c', CLEAN, 'sh', cache])
+})
+
+function mapOf(tree: any): any {
+  if (!tree || typeof tree !== 'object') return undefined
+  if (tree.type === 'Client' && tree.props?.key === 'treemap') return tree.props.props
+  for (const c of [tree.children ?? []].flat()) {
+    const hit = mapOf(c)
+    if (hit) return hit
+  }
+}
+
+test('treemap: a folder under the cursor maps its children by du size, a click selects the block in the tree and names its size, a second click on a folder maps that folder, and an edit inside lights its block', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['src', 'dir'], ['big.bin', 'file'], ['a.ts', 'file']], [`${root}/src`]: [['x.ts', 'file'], ['y.ts', 'file']] },
+    du: {
+      [root]: `6144\t${root}/src\n3072\t${root}/big.bin\n4\t${root}/a.ts\n9220\t${root}\n`,
+      [`${root}/src`]: `5120\t${root}/src/x.ts\n1024\t${root}/src/y.ts\n6144\t${root}/src\n`,
+    },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  expect(ran).toContainEqual(['du', '-akxH', '-d', '1', '--', root])
+  let map = mapOf(await ui.drawn())
+  const text = (m: any) => m.rows.map((r: any) => r.left.map((s: any) => s.t).join('')).join('\n')
+  expect(text(map)).toContain('src')
+  expect(text(map)).toContain('6.0 M')
+  expect(text(map)).toContain('big.bin')
+  expect(text(map)).toContain('╭')
+  expect(JSON.stringify(await ui.drawn())).toContain('9.0 M')
+  await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
+  await clock.settle()
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('src 6.0 M 67%')
+  expect(mapOf(await ui.drawn())).toBeDefined()
+  expect(drawn).toContain(`"active":"${root}/src"`)
+  map = mapOf(await ui.drawn())
+  expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src` && s.bg === '#6b7280'))).toBe(true)
+  await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
+  await clock.settle()
+  expect(ran).toContainEqual(['du', '-akxH', '-d', '1', '--', `${root}/src`])
+  expect(text(mapOf(await ui.drawn()))).toContain('x.ts')
+  await $.tool.call({ tool: 'Edit', file_path: `${root}/src/x.ts`, old_string: 'a', new_string: 'b' } as any)
+  await clock.settle()
+  map = mapOf(await ui.drawn())
+  expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src/x.ts` && s.c === '#f97316'))).toBe(true)
+  await ui.post({ key: 'j' }, { in: 'treemap' })
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).not.toContain('"key":"treemap"')
 })
