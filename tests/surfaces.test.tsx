@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { LINUX_LAUNCH, TMUX_OPEN } from '../hooks/open'
+import { LINUX_LAUNCH, TMUX_OPEN, TMUX_WORKSPACE } from '../hooks/open'
 import { CLEAN, POLICY, POSTER } from '../hooks/peek'
 import { age, ancestorsOf, formatSize, replaceChildren, toNodes } from '../hooks/tree'
 
@@ -2118,4 +2118,105 @@ test('treemap: a folder under the cursor maps its children by du size, a click s
   await ui.post({ key: 'j' }, { in: 'treemap' })
   await clock.settle()
   expect(JSON.stringify(await ui.drawn())).not.toContain('"key":"treemap"')
+})
+
+const HERDR_TAB = '{"id":"cli:tab:create","result":{"root_pane":{"pane_id":"w1:p40"},"tab":{"tab_id":"w1:t9"},"type":"tab_created"}}'
+const HERDR_WORKSPACE = '{"id":"cli:workspace:create","result":{"root_pane":{"pane_id":"w2:p1"},"tab":{"tab_id":"w2:t1"},"workspace":{"workspace_id":"w2"},"type":"workspace_created"}}'
+
+for (const [target, made, pane] of [
+  ['auto', ['pane', 'split', '--current', '--direction', 'right'], 'w1:p37'],
+  ['pane right', ['pane', 'split', '--current', '--direction', 'right'], 'w1:p37'],
+  ['pane below', ['pane', 'split', '--current', '--direction', 'down'], 'w1:p37'],
+  ['tab', ['tab', 'create', '--workspace', 'w1'], 'w1:p40'],
+  ['workspace', ['workspace', 'create'], 'w2:p1'],
+] as const) {
+  test(`terminal target ${target} in herdr: Enter opens the editor through herdr ${made.slice(0, 2).join(' ')}${made[4] ? ` ${made[4]}` : ''}${made[2] === '--workspace' ? " in Claude's workspace" : ''} and runs it in the new pane`, { timeoutMs: 20_000, options: { open: 'editor', target } }, async ($, on) => {
+    const ran: Ran = []
+    const root = '/home/k/proj'
+    const bin = '/opt/herdr/bin/herdr'
+    const clock = world(on, { os: 'linux', env: { HOME: '/home/k', HERDR_ENV: '1', HERDR_BIN_PATH: bin, HERDR_WORKSPACE_ID: 'w1', EDITOR: 'nvim' }, cwd: root, top: '', dirs: { [root]: [['a.md', 'file']] }, status: '', numstat: '', stdout: { [`${bin} pane split`]: HERDR_SPLIT, [`${bin} tab create`]: HERDR_TAB, [`${bin} workspace create`]: HERDR_WORKSPACE } }, ran)
+    await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+    await clock.settle()
+    const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+    await ui.post({ press: `${root}/a.md` }, { in: 'rows' })
+    await ui.press({ key: 'nav-o' })
+    await clock.settle()
+    expect(ran.filter(a => a[0] === bin && a[1] !== '--version')).toEqual([
+      [bin, ...made, '--focus', '--cwd', root, '--env', `PANE_OPEN_TARGET=${root}/a.md`],
+      [bin, 'pane', 'run', pane, `exec 'nvim' "$PANE_OPEN_TARGET"`],
+    ])
+    expect(ran.some(a => a[0] === 'toast')).toBe(false)
+    await ui.unmount()
+  })
+}
+
+for (const [target, launch] of [
+  ['pane right', 'exec tmux split-window -h -c "$d" -- "$@" ${n:+"+$n"} "$f"'],
+  ['pane below', 'exec tmux split-window -v -c "$d" -- "$@" ${n:+"+$n"} "$f"'],
+  ['tab', 'exec tmux new-window -c "$d" -- "$@" ${n:+"+$n"} "$f"'],
+  ['workspace', `s=$(tmux new-session -d -P -F '#{session_id}' -c "$d" -- "$@" \${n:+"+$n"} "$f") && tmux set-option -t "$s" detach-on-destroy off >/dev/null && { tmux switch-client -t "$s" || { tmux kill-session -t "$s"; exit 1; }; }; exit`],
+] as const) {
+  test(`terminal target ${target} in tmux: Enter starts the editor with ${launch.split(' -c ')[0]} when no nvim is running`, { timeoutMs: 20_000, options: { open: 'editor', target } }, async ($, on) => {
+    const ran: Ran = []
+    const root = '/home/k/proj'
+    const clock = world(on, { os: 'linux', env: { HOME: '/home/k', TMUX: '/tmp/tmux-1000/default,1,0', EDITOR: 'nvim' }, cwd: root, top: '', dirs: { [root]: [['a.md', 'file']] }, status: '', numstat: '' }, ran)
+    await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+    await clock.settle()
+    const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+    await ui.post({ press: `${root}/a.md` }, { in: 'rows' })
+    await ui.press({ key: 'nav-o' })
+    await clock.settle()
+    const opened = ran.find(a => a[0] === 'sh' && a[1] === '-c' && a[2]?.includes('remote-expr'))
+    expect(opened?.slice(3)).toEqual(['sh', `${root}/a.md`, root, '', 'nvim'])
+    const script = opened?.[2]?.split('\n') ?? []
+    expect(script.at(-1)).toBe(launch)
+    expect(script[2]).toBe(`case \${bin##*/} in nvim) ;; *) ${launch} ;; esac`)
+    await ui.unmount()
+  })
+}
+
+for (const [target, argv] of [
+  ['auto', ['tmux', 'new-window', '-c', '/home/k/proj', '--', 'lazygit', '-f', '/home/k/proj/a.ts']],
+  ['tab', ['tmux', 'new-window', '-c', '/home/k/proj', '--', 'lazygit', '-f', '/home/k/proj/a.ts']],
+  ['pane right', ['tmux', 'split-window', '-h', '-c', '/home/k/proj', '--', 'lazygit', '-f', '/home/k/proj/a.ts']],
+  ['pane below', ['tmux', 'split-window', '-v', '-c', '/home/k/proj', '--', 'lazygit', '-f', '/home/k/proj/a.ts']],
+  ['workspace', ['sh', '-c', TMUX_WORKSPACE, 'sh', '/home/k/proj', 'lazygit', '-f', '/home/k/proj/a.ts']],
+] as const) {
+  test(`terminal target ${target}: Diff with runs lazygit in tmux with ${argv[0] === 'sh' ? 'a new session' : argv[1]}`, { timeoutMs: 20_000, options: { diff: 'lazygit -f', target } }, async ($, on) => {
+    const ran: Ran = []
+    const root = '/home/k/proj'
+    const clock = world(on, { os: 'linux', env: { HOME: '/home/k', TMUX: '/tmp/tmux-1/default,1,0' }, cwd: root, top: root, dirs: { [root]: [['a.ts', 'file']] }, status: '## main\0 M a.ts\0', numstat: '' }, ran)
+    await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+    await clock.settle()
+    const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+    await clock.settle()
+    await ui.post({ key: 'end' }, { in: 'rows' })
+    await ui.post({ key: 'd' }, { in: 'rows' })
+    await clock.settle()
+    expect(ran).toContainEqual([...argv])
+    await ui.unmount()
+  })
+}
+
+test('terminal target pane below in herdr: Diff with splits the pane downward', { timeoutMs: 20_000, options: { diff: 'lazygit -f', target: 'pane below' } }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const bin = '/opt/herdr/bin/herdr'
+  const clock = world(on, { os: 'linux', env: { HOME: '/home/k', HERDR_ENV: '1', HERDR_BIN_PATH: bin }, cwd: root, top: root, dirs: { [root]: [['a.ts', 'file']] }, status: '## main\0 M a.ts\0', numstat: '', stdout: { [`${bin} pane split`]: HERDR_SPLIT } }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await ui.post({ key: 'end' }, { in: 'rows' })
+  await ui.post({ key: 'd' }, { in: 'rows' })
+  await clock.settle()
+  expect(ran.filter(a => a[0] === bin && a[1] !== '--version')).toEqual([
+    [bin, 'pane', 'split', '--current', '--direction', 'down', '--focus', '--cwd', root, '--env', `PANE_OPEN_TARGET=${root}/a.ts`],
+    [bin, 'pane', 'run', 'w1:p37', `exec 'lazygit' '-f' "$PANE_OPEN_TARGET"`],
+  ])
+  await ui.unmount()
+})
+
+test('tmux workspace: the new session returns to Claude when the program exits and is removed when no client can switch to it', () => {
+  expect(TMUX_WORKSPACE).toBe(`d=$1; shift; s=$(tmux new-session -d -P -F '#{session_id}' -c "$d" -- "$@") && tmux set-option -t "$s" detach-on-destroy off >/dev/null && { tmux switch-client -t "$s" || { tmux kill-session -t "$s"; exit 1; }; }; exit`)
 })

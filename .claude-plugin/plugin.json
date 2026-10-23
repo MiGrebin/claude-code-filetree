@@ -127,6 +127,19 @@
       "description": "What d does on a changed file, in the tree or the preview. Empty: show its diff against HEAD in the pane, drawn by Claude Code's own diff view (an untracked file shows as all added; d again goes back to the file). Anything else is a terminal command, run on the file in a tmux window, a herdr pane or, on Linux, a new terminal window through xdg-terminal-exec, the file path going last. Examples: hunk diff --, lazygit -f, git difftool -y --, nvim -c Gvdiffsplit.",
       "default": ""
     },
+    "target": {
+      "type": "string",
+      "title": "Terminal target",
+      "description": "Where Open with: editor, e in the preview and a Diff with command start their terminal program inside tmux or herdr. auto: a new tmux window, or a herdr pane split to the right. pane right and pane below split the current pane; tab opens a tmux window or a herdr tab; workspace opens a new tmux session and switches to it, or a new herdr workspace. In tmux, nvim already running in the session is reused wherever it is.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "pane right",
+        "pane below",
+        "tab",
+        "workspace"
+      ]
+    },
     "ignore": {
       "type": "string",
       "title": "Ignore",
