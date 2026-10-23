@@ -171,6 +171,37 @@ test('macOS Claude Code app: desktop pane draws, selects, opens with open', { ti
   await ui.unmount()
 })
 
+test('moving the cursor writes no shared tree state and an idle tree spawns nothing', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const writes: string[] = []
+  on('state.set', (_$: any, e: any, next: any) => {
+    writes.push(e.key)
+    return next(e)
+  })
+  const root = '/home/k/proj'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: root,
+    dirs: { [root]: [['src', 'dir'], ['a.txt', 'file'], ['b.txt', 'file'], ['c.txt', 'file']], [`${root}/src`]: [['a.ts', 'file']] },
+    status: '## main\0 M a.txt\0', numstat: '1\t0\ta.txt\0',
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  writes.length = 0
+  for (const key of ['j', 'j', 'k', 'l', 'h', 'j']) {
+    await ui.post({ key }, { in: 'rows' })
+    await clock.settle()
+  }
+  const spawned = ran.length
+  for (let i = 0; i < 10; i++) await clock.advance(2_000)
+  expect(writes.filter(k => k === 'tree')).toEqual([])
+  expect(ran.slice(spawned).filter(a => a[0] !== 'toast')).toEqual([])
+  const rows = ((await ui.drawn()) as any).children.find((c: any) => c.type === 'Client').props.props
+  expect(rows.active).toBe(`${root}/b.txt`)
+  await ui.unmount()
+})
+
 test('macOS outside a repo: write scan uses find -newer marker, not GNU -newermt', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const root = '/Users/k/scratch'
