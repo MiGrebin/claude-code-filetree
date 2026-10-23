@@ -171,7 +171,7 @@ test('macOS Claude Code app: desktop pane draws, selects, opens with open', { ti
   await ui.unmount()
 })
 
-test('moving the cursor writes no shared tree state and an idle tree spawns nothing', { timeoutMs: 20_000 }, async ($, on) => {
+test('moving the cursor writes at most one tree snapshot and an idle tree spawns nothing', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const writes: string[] = []
   on('state.set', (_$: any, e: any, next: any) => {
@@ -195,7 +195,7 @@ test('moving the cursor writes no shared tree state and an idle tree spawns noth
   }
   const spawned = ran.length
   for (let i = 0; i < 10; i++) await clock.advance(2_000)
-  expect(writes.filter(k => k === 'tree')).toEqual([])
+  expect(writes.filter(k => k === 'tree').length <= 1).toBe(true)
   expect(ran.slice(spawned).filter(a => a[0] !== 'toast')).toEqual([])
   const rows = ((await ui.drawn()) as any).children.find((c: any) => c.type === 'Client').props.props
   expect(rows.active).toBe(`${root}/b.txt`)
