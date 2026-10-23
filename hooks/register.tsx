@@ -302,7 +302,7 @@ function refreshGit($: EngineInterface): Promise<void> {
   return gitNext
 }
 
-async function reset($: EngineInterface, root: string, focus = false): Promise<void> {
+async function reset($: EngineInterface, root: string, focus = false, ready?: Promise<void>): Promise<void> {
   const prev = await get($)
   generation += 1
   blink?.cancel()
@@ -313,10 +313,13 @@ async function reset($: EngineInterface, root: string, focus = false): Promise<v
   sizeQueue = []
   await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, showSize: prev.root ? prev.showSize : sizeDefault }))
   const title = `Files: ${root.split('/').pop() || root}`
+  const listed = loadDirs($, [root])
+  const repo = detectRepo($)
+  await ready
   if (focus) await $.ui.open({ id: PANE, title, focus: true })
   else if (!noDock) await $.ui.open({ id: PANE, title })
-  await loadDirs($, [root])
-  await detectRepo($)
+  await listed
+  await repo
   await refreshGit($)
 }
 
@@ -1263,15 +1266,24 @@ export const register: Register = (on, options) => {
     home = posix(((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/[\\/]+$/, ''))
     activityId = Math.max(activityId, ...(await activities($)).map(a => a.id))
     void (async () => {
-      pointer = await finePointerOk($)
-      try {
-        const remote = Boolean((await $.env.get('SSH_CONNECTION')) || (await $.env.get('SSH_TTY')))
-        noNerd = !remote && (windows || (await fontState($, 'f04eb')) !== 'ok')
-      } catch {
-        noNerd = true
-      }
-      await loadTheme($)
-      await readThemeSetting($).catch(() => undefined)
+      const ready = (async () => {
+        pointer = await finePointerOk($)
+        try {
+          const remote = Boolean((await $.env.get('SSH_CONNECTION')) || (await $.env.get('SSH_TTY')))
+          noNerd = !remote && (windows || (await fontState($, 'f04eb')) !== 'ok')
+        } catch {
+          noNerd = true
+        }
+        await loadTheme($)
+        await readThemeSetting($).catch(() => undefined)
+      })()
+      const t = await get($)
+      if (t.flashOn) await patch($, () => ({ flash: [], flashDim: [], flashOn: false, flashTones: {} }))
+      if (t.preview) await patch($, () => ({ preview: '', previewTop: 0 }))
+      await setActivities($, cur => cur.map(a => (a.state === 'running' ? { ...a, state: 'failed', label: `${a.kind} interrupted` } : a)))
+      const cwd = await cwdOf($)
+      const shown = !t.root || t.nodes.length === 0 || (follow && t.root !== cwd) ? reset($, cwd, false, ready) : ready.then(() => (noDock ? undefined : $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` })))
+      await ready
       themePoll?.cancel()
       themePoll = themeMtime ? $.clock.every(THEME_POLL_MS, () => void loadTheme($)) : null
       ageTick?.cancel()
@@ -1279,13 +1291,7 @@ export const register: Register = (on, options) => {
       gitPoll?.cancel()
       gitStamp = null
       gitPoll = $.clock.every(GIT_POLL_MS, () => void followCwd($).then(moved => moved || gitChanged($)))
-      const t = await get($)
-      if (t.flashOn) await patch($, () => ({ flash: [], flashDim: [], flashOn: false, flashTones: {} }))
-      if (t.preview) await patch($, () => ({ preview: '', previewTop: 0 }))
-      await setActivities($, cur => cur.map(a => (a.state === 'running' ? { ...a, state: 'failed', label: `${a.kind} interrupted` } : a)))
-      const cwd = await cwdOf($)
-      if (!t.root || t.nodes.length === 0 || (follow && t.root !== cwd)) await reset($, cwd)
-      else if (!noDock) await $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` })
+      await shown
     })()
     return next(e)
   })
