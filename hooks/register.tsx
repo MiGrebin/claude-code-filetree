@@ -1742,7 +1742,6 @@ export const register: Register = (on, options) => {
           <Box flexGrow={1}>
             <Input
               key="q"
-              label="/ "
               placeholder="search"
               submitLabel="jump"
               value={t.query}
