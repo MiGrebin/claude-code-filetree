@@ -30,15 +30,17 @@ export function terminalTarget(value: unknown): Target {
   return TARGETS.find(t => t === value) ?? 'auto'
 }
 
+const TMUX_SWITCH = 'tmux set-option -t "$s" detach-on-destroy off >/dev/null && { tmux switch-client -t "$s" || { tmux kill-session -t "$s"; exit 1; }; }; exit'
+
 const TMUX_LAUNCH: Record<Target, string> = {
   auto: 'exec tmux new-window -c "$d" -- "$@" ${n:+"+$n"} "$f"',
   tab: 'exec tmux new-window -c "$d" -- "$@" ${n:+"+$n"} "$f"',
   'pane right': 'exec tmux split-window -h -c "$d" -- "$@" ${n:+"+$n"} "$f"',
   'pane below': 'exec tmux split-window -v -c "$d" -- "$@" ${n:+"+$n"} "$f"',
-  workspace: 's=$(tmux new-session -d -P -F \'#{session_id}\' -c "$d" -- "$@" ${n:+"+$n"} "$f") && exec tmux switch-client -t "$s"',
+  workspace: `s=$(tmux new-session -d -P -F '#{session_id}' -c "$d" -- "$@" \${n:+"+$n"} "$f") && ${TMUX_SWITCH}`,
 }
 
-export const TMUX_WORKSPACE = 'd=$1; shift; s=$(tmux new-session -d -P -F \'#{session_id}\' -c "$d" -- "$@") && exec tmux switch-client -t "$s"'
+export const TMUX_WORKSPACE = `d=$1; shift; s=$(tmux new-session -d -P -F '#{session_id}' -c "$d" -- "$@") && ${TMUX_SWITCH}`
 
 export function tmuxCommand(target: Target, dir: string, argv: string[]): string[] {
   if (target === 'workspace') return ['sh', '-c', TMUX_WORKSPACE, 'sh', dir, ...argv]
@@ -95,13 +97,13 @@ export function tmuxOpenCommand(editor: string, target: string, line?: number, w
   }
 }
 
-export function herdrOpenCommand(herdr: string, editor: string, target: string, line?: number, where: Target = 'auto') {
+export function herdrOpenCommand(herdr: string, editor: string, target: string, line?: number, where: Target = 'auto', workspace = '') {
   const argv = words(editor)
   if (!argv[0]) throw new Error('Editor command is empty')
   const dir = target.slice(0, target.lastIndexOf('/')) || '/'
   const command = [...argv, ...(line ? [`+${line}`] : [])].map(w => `'${w.replace(/'/g, "'\\''")}'`).join(' ')
   return {
-    split: [herdr, ...(where === 'tab' ? ['tab', 'create'] : where === 'workspace' ? ['workspace', 'create'] : ['pane', 'split', '--current', '--direction', where === 'pane below' ? 'down' : 'right']), '--focus', '--cwd', dir, '--env', `PANE_OPEN_TARGET=${target}`],
+    split: [herdr, ...(where === 'tab' ? ['tab', 'create', ...(workspace ? ['--workspace', workspace] : [])] : where === 'workspace' ? ['workspace', 'create'] : ['pane', 'split', '--current', '--direction', where === 'pane below' ? 'down' : 'right']), '--focus', '--cwd', dir, '--env', `PANE_OPEN_TARGET=${target}`],
     run: (pane: string) => [herdr, 'pane', 'run', pane, `exec ${command} "$PANE_OPEN_TARGET"`],
     init: { timeoutMs: 10_000 },
   }

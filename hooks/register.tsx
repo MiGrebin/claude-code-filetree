@@ -1116,7 +1116,7 @@ async function editorHost($: EngineInterface, os: 'linux' | 'darwin' | 'win32'):
 }
 
 async function openInHerdr($: EngineInterface, editor: string, path: string, line?: number): Promise<void> {
-  const { split, run, init } = herdrOpenCommand((await $.env.get('HERDR_BIN_PATH')) || 'herdr', editor, path, line, targetSetting)
+  const { split, run, init } = herdrOpenCommand((await $.env.get('HERDR_BIN_PATH')) || 'herdr', editor, path, line, targetSetting, (await $.env.get('HERDR_WORKSPACE_ID')) || '')
   const made = await $.process.run(split, init)
   const sent = made.exitCode === 0 ? await $.process.run(run(herdrPane(made.stdout)), init) : made
   if (sent.exitCode !== 0) $.ui.toast(`could not open ${path} with ${editor}: ${herdrError(sent.stderr) || `exit ${sent.exitCode}`}`)
