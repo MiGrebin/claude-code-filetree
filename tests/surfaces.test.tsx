@@ -1411,29 +1411,29 @@ test('a written file whose name holds a newline still shimmers', { timeoutMs: 20
   await ui.unmount()
 })
 
-test('the pane takes its background from the Omarchy theme and follows a theme switch', { timeoutMs: 20_000 }, async ($, on) => {
+test('the pane draws in the terminal\'s own colours: no background, ANSI palette names, and an Omarchy theme file is never read', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const root = '/home/k/proj'
-  const w: World = { os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', dirs: { [root]: [['a.ts', 'file']] }, status: '', numstat: '', theme: { toml: 'background = "#1e1e2e"\ndark_background = "#161622"\n', mtimeMs: 1 } }
+  const w: World = { os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: root, dirs: { [root]: [['a.ts', 'file'], ['sub', 'dir']] }, status: '## main\0 M a.ts\0', numstat: '', theme: { toml: 'background = "#1e1e2e"\ndark_background = "#161622"\n', mtimeMs: 1 } }
   const clock = world(on, w, ran)
   await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
   await clock.settle()
   const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
   await clock.settle()
-  expect(await texts(ui)).toContain('"backgroundColor":"#161622"')
-  w.theme = { toml: 'background = "#fafafa"\n', mtimeMs: 2 }
-  await clock.advance(2_000)
+  await clock.advance(10_000)
   await clock.settle()
   const shown = await texts(ui)
-  expect(shown).toContain('"backgroundColor":"#fafafa"')
-  expect(shown).not.toContain('#161622')
+  expect(ran.some(a => a[0] === 'theme-stat')).toBe(false)
+  expect(shown).not.toContain('"backgroundColor":"#')
+  expect(shown).toContain('"activeBg":"ansi256(0)","hoverBg":""')
+  for (const c of ['ansi256(4)', 'ansi256(3)']) expect(shown).toContain(`"color":"${c}"`)
   await ui.unmount()
 })
 
-test('the palette setting wins over the Omarchy theme key by key and names an entry it cannot read', { timeoutMs: 20_000, options: { palette: 'bg=#1d2021 accent=#83a598 nope=#fff muted=gray selection=#fff' } }, async ($, on) => {
+test('the palette setting overrides the terminal colours key by key and names an entry it cannot read', { timeoutMs: 20_000, options: { palette: 'bg=#1d2021 accent=#83a598 nope=#fff muted=gray selection=#fff' } }, async ($, on) => {
   const ran: Ran = []
   const root = '/home/k/proj'
-  const w: World = { os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', dirs: { [root]: [['a.ts', 'file'], ['sub', 'dir']] }, status: '', numstat: '', theme: { toml: 'background = "#1e1e2e"\ndark_background = "#161622"\nforeground = "#cdd6f4"\n', mtimeMs: 1 } }
+  const w: World = { os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', dirs: { [root]: [['a.ts', 'file'], ['sub', 'dir']] }, status: '', numstat: '' }
   const clock = world(on, w, ran)
   await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
   await clock.settle()
@@ -1450,23 +1450,7 @@ test('the palette setting wins over the Omarchy theme key by key and names an en
   await ui.unmount()
 })
 
-test('without an Omarchy theme the pane keeps the terminal background and nothing polls', { timeoutMs: 20_000 }, async ($, on) => {
-  const ran: Ran = []
-  const root = '/home/k/proj'
-  const clock = world(on, { os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', dirs: { [root]: [['a.ts', 'file']] }, status: '', numstat: '' }, ran)
-  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
-  await clock.settle()
-  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
-  await clock.settle()
-  const stats = ran.filter(a => a[0] === 'theme-stat').length
-  await clock.advance(10_000)
-  await clock.settle()
-  expect(ran.filter(a => a[0] === 'theme-stat').length).toBe(stats)
-  expect(await texts(ui)).not.toContain('"backgroundColor":"#')
-  await ui.unmount()
-})
-
-test('a light theme setting draws every color at AAA contrast in the terminal, and the desktop app and a dark theme keep the dark palette', { timeoutMs: 20_000 }, async ($, on) => {
+test('a light theme setting only changes the activity colours; the tree keeps the terminal palette on both surfaces', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const root = '/Users/k/proj'
   const clock = world(on, {
@@ -1474,38 +1458,20 @@ test('a light theme setting draws every color at AAA contrast in the terminal, a
     dirs: { [root]: [['a.ts', 'file'], ['b.ts', 'file']] },
     status: '## main\0 M a.ts\0?? b.ts\0', numstat: '3\t1\ta.ts\0',
   }, ran)
-  let theme = 'light-daltonized'
-  on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: theme, provider: { plugin: 'engine', tier: 'core' }, isLocked: false }] as any }))
-  on('config.set', (_$: any, e: any) => {
-    theme = e.value
-    return { value: e.value }
-  })
+  on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: 'light-daltonized', provider: { plugin: 'engine', tier: 'core' }, isLocked: false }] as any }))
   await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
   await clock.settle()
-  let ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
   await clock.settle()
   const light = await texts(ui)
-  expect(light).toContain('"activeBg":"#e2e6ec","hoverBg":"#f0f2f5"')
-  for (const c of ['#1e3a8a', '#78350f', '#14532d', '#374151']) expect(light).toContain(`"color":"${c}"`)
+  expect(light).toContain('"activeBg":"ansi256(0)"')
+  for (const c of ['ansi256(3)', 'ansi256(2)', 'ansi256(8)']) expect(light).toContain(`"color":"${c}"`)
   expect(light).toContain('#431407')
-  expect(light).not.toContain('"color":"#5b9bd5"')
   await ui.unmount()
   const desktop = await $.ui.mount({ plugin: 'filetree', surface: 'desktop', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
   await clock.settle()
-  const onDesktop = await texts(desktop)
-  expect(onDesktop).toContain('"activeBg":"#6b7280","hoverBg":"#3b3d41"')
-  expect(onDesktop).not.toContain('"color":"#1e3a8a"')
+  expect(await texts(desktop)).toContain('"activeBg":"ansi256(0)"')
   await desktop.unmount()
-  ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
-  await clock.settle()
-  expect(await texts(ui)).toContain('"color":"#1e3a8a"')
-  await $.config.set({ key: 'theme', value: 'dark' } as any)
-  await clock.settle()
-  const dark = await texts(ui)
-  expect(dark).toContain('"activeBg":"#6b7280","hoverBg":"#3b3d41"')
-  for (const c of ['#5b9bd5', '#e5c07b', '#98c379', '#808a96']) expect(dark).toContain(`"color":"${c}"`)
-  expect(dark).not.toContain('"color":"#1e3a8a"')
-  await ui.unmount()
 })
 
 test('formatSize: bytes, binary units, one decimal under 100, ? for unknown', async () => {
@@ -2106,7 +2072,7 @@ test('treemap: a folder under the cursor maps its children by du size, a click s
   expect(mapOf(await ui.drawn())).toBeDefined()
   expect(drawn).toContain(`"active":"${root}/src"`)
   map = mapOf(await ui.drawn())
-  expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src` && s.b))).toBe(true)
+  expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src` && s.bg === 'ansi256(4)'))).toBe(true)
   await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
   await clock.settle()
   expect(ran).toContainEqual(['du', '-akxH', '-d', '2', '--', `${root}/src`])
@@ -2114,7 +2080,7 @@ test('treemap: a folder under the cursor maps its children by du size, a click s
   await $.tool.call({ tool: 'Edit', file_path: `${root}/src/x.ts`, old_string: 'a', new_string: 'b' } as any)
   await clock.settle()
   map = mapOf(await ui.drawn())
-  expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src/x.ts` && s.b))).toBe(true)
+  expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src/x.ts` && s.bg === '#f97316'))).toBe(true)
   await ui.post({ key: 'j' }, { in: 'treemap' })
   await clock.settle()
   expect(JSON.stringify(await ui.drawn())).not.toContain('"key":"treemap"')

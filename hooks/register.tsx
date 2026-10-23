@@ -7,9 +7,9 @@ import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
 import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
-import { draw, gray, layout, mix, parseDu, REST, type Tile, type Usage } from './treemap'
-import { ADD_COLOR, DEL_COLOR, LIGHT_ADD_COLOR, LIGHT_DEL_COLOR, LIGHT_HOVER, type Palette, parsePalette } from './palette'
-import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR, LIGHT_GIT_COLOR } from './icons'
+import { draw, layout, mix, parseDu, REST, type Tile, type Usage } from './treemap'
+import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
+import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR } from './icons'
 import {
   age,
   ancestorsOf,
@@ -21,11 +21,9 @@ import {
   inside,
   isAbsolute,
   join,
-  LIGHT_THEME,
   mapper,
   parseGit,
   parseNumstat,
-  parseTheme,
   posix,
   relative,
   dropBelow,
@@ -40,7 +38,6 @@ import {
 } from './tree'
 
 const TREE = { plugin: 'filetree', key: 'tree' } as const
-const THEME = { plugin: 'filetree', key: 'theme' } as const
 const ACTIVITY = { plugin: 'filetree', key: 'activity' } as const
 const PANE = 'filetree'
 const SHIMMER = Object.fromEntries(Object.entries(TONES).map(([k, v]) => [k, { bright: v.bright, dim: v.dim }]))
@@ -55,8 +52,6 @@ const ROWS_BUDGET = 80_000
 const READ_REVEAL_LIMIT = 12
 const SEARCH_REVEAL_LIMIT = 60
 const ACTIVITY_TTL_MS = 45_000
-const THEME_FILE = '.local/state/omarchy/current/theme/colors.toml'
-const THEME_POLL_MS = 2000
 const GIT_POLL_MS = 2000
 const FONT_SCRIPT =
   'if command -v fc-list >/dev/null 2>&1; then f=$(fc-list ":charset=$1" file | grep -vi lastresort | head -n1 | cut -d: -f1); fi; ' +
@@ -76,12 +71,10 @@ const AGE_TICK_MS = 60_000
 let blink: Timer | null = null
 let cached: FileTree | null = null
 let snapshot: Timer | null = null
-let themePoll: Timer | null = null
 let gitPoll: Timer | null = null
 let gitStamp: string | null = null
 let gitDirOf = { root: '', dir: '' }
 let ageTick: Timer | null = null
-let themeMtime: number | null = null
 let lightTerminal = false
 let generation = 0
 let lastPress = { key: '', at: 0 }
@@ -96,7 +89,6 @@ let targetSetting: Target = 'auto'
 let palette: Palette = parsePalette('')
 let inTmux = false
 let inHerdr = false
-let coarse = false
 let previewLine = 1
 let previewed: Preview | null = null
 let previewRows = 20
@@ -714,7 +706,6 @@ async function gitChanged($: EngineInterface): Promise<void> {
 }
 
 async function settleRoot($: EngineInterface): Promise<void> {
-  await loadTheme($)
   const root = follow || !lastRoot ? await cwdOf($) : lastRoot
   const t = await get($)
   if (t.root !== root || t.nodes.length === 0) await reset($, root)
@@ -1449,21 +1440,6 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   else if (cur && (key === ' ' || key === 'space')) await (cur.kind !== 'dir' && (await osName($)) === 'darwin' ? quickLook($, cur.id) : toggle($, cur))
 }
 
-async function loadTheme($: EngineInterface): Promise<void> {
-  const path = `${(await $.env.get('HOME')) ?? ''}/${THEME_FILE}`
-  try {
-    const stat = await $.fs.stat(path)
-    if (stat.kind !== 'file') throw new Error('no theme file')
-    if (stat.mtimeMs === themeMtime) return
-    await $.state.set(THEME, parseTheme(String(await $.fs.read(path))))
-    themeMtime = stat.mtimeMs
-  } catch {
-    if (themeMtime === 0) return
-    await $.state.set(THEME, DEFAULT_THEME)
-    themeMtime = 0
-  }
-}
-
 async function pressHeader($: EngineInterface, id: string): Promise<void> {
   const t = await get($)
   if (id === 'up') {
@@ -1520,8 +1496,6 @@ export const register: Register = (on, options) => {
     useDrives(windows)
     inTmux = !windows && Boolean(await $.env.get('TMUX'))
     inHerdr = !windows && Boolean(await $.env.get('HERDR_ENV'))
-    const colorterm = ((await $.env.get('COLORTERM')) ?? '').toLowerCase()
-    coarse = !windows && ((inTmux && !(await $.env.get('CLAUDE_CODE_TMUX_TRUECOLOR'))) || (colorterm !== 'truecolor' && colorterm !== '24bit'))
     pictureSession = (await $.session.id()).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'session'
     pictureBase = ((await $.env.get('XDG_RUNTIME_DIR')) || (await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '') || '/'
     home = posix(((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/[\\/]+$/, ''))
@@ -1535,7 +1509,6 @@ export const register: Register = (on, options) => {
         } catch {
           noNerd = true
         }
-        await loadTheme($)
         await readThemeSetting($).catch(() => undefined)
       })()
       const t = await get($)
@@ -1545,8 +1518,6 @@ export const register: Register = (on, options) => {
       const cwd = await cwdOf($)
       const shown = !t.root || t.nodes.length === 0 || (follow && t.root !== cwd) ? reset($, cwd, false, ready) : ready.then(() => (noDock ? undefined : $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` })))
       await ready
-      themePoll?.cancel()
-      themePoll = themeMtime ? $.clock.every(THEME_POLL_MS, () => void loadTheme($)) : null
       ageTick?.cancel()
       ageTick = showAge ? $.clock.every(AGE_TICK_MS, () => $.ui.invalidate('ui.render')) : null
       gitPoll?.cancel()
@@ -1796,13 +1767,13 @@ export const register: Register = (on, options) => {
     const { Box, Text, Button, Input, Client } = elements
     const Image = 'Image' in elements ? elements.Image : undefined
     const t = await get($)
-    const light = !themeMtime && e.surface !== 'desktop' && lightTerminal
-    const theme: Theme = { ...(light ? LIGHT_THEME : ((await $.state.get(THEME)).value ?? DEFAULT_THEME)), ...palette.theme }
+    const light = e.surface !== 'desktop' && lightTerminal
+    const theme: Theme = { ...DEFAULT_THEME, ...palette.theme }
     const tones = light ? LIGHT_TONES : TONES
-    const gitColors = { ...(light ? LIGHT_GIT_COLOR : GIT_COLOR), ...palette.git }
-    const addColor = palette.add ?? (light ? LIGHT_ADD_COLOR : ADD_COLOR)
-    const delColor = palette.del ?? (light ? LIGHT_DEL_COLOR : DEL_COLOR)
-    const rowColors = { activeBg: theme.selection, hoverBg: palette.hover ?? (light ? LIGHT_HOVER : faint(theme.selection)), tones: light ? LIGHT_SHIMMER : SHIMMER }
+    const gitColors = { ...GIT_COLOR, ...palette.git }
+    const addColor = palette.add ?? ADD_COLOR
+    const delColor = palette.del ?? DEL_COLOR
+    const rowColors = { activeBg: theme.selection, hoverBg: palette.hover ?? (theme.selection.startsWith('#') ? faint(theme.selection) : ''), tones: light ? LIGHT_SHIMMER : SHIMMER }
     // The desktop tab never hands the wheel or the scrollbar drag to the pane, so
     // there it draws every row and lets the engine scroll the body.
     nativeScroll = e.surface === 'desktop'
@@ -1897,7 +1868,7 @@ export const register: Register = (on, options) => {
       if (!c) return []
       const out: Seg[] = []
       if (c[0] > 0) out.push({ t: ` ?:${c[0]}`, c: gitColors['?'] ?? addColor })
-      if (c[1] > 0) out.push({ t: ` M:${c[1]}`, c: gitColors.M ?? '#e5c07b' })
+      if (c[1] > 0) out.push({ t: ` M:${c[1]}`, c: gitColors.M ?? 'ansi256(3)' })
       if (c[2] > 0) out.push({ t: ` D:${c[2]}`, c: theme.urgent })
       return out
     }
@@ -2072,7 +2043,8 @@ export const register: Register = (on, options) => {
         const total = scan.done ? scan.total : scan.items.reduce((a, u) => a + u.bytes, 0)
         const lit = t.flashOn ? t.flash : []
         const pick = tiles.find(x => x.path === lock?.pick)
-        const ground = theme.bg || (light ? '#ffffff' : '#1e1e2e')
+        const ground = theme.bg
+        const shade = ground.startsWith('#') && theme.accent.startsWith('#')
         const pct = (bytes: number) => `${total ? Math.max(bytes ? 1 : 0, Math.round((bytes / total) * 100)) : 0}%`
         const look = (tile: Tile) => {
           const hot = lit.find(f => inside(tile.path, f))
@@ -2081,9 +2053,9 @@ export const register: Register = (on, options) => {
           const dim = tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
           const share = total ? tile.bytes / total : 0
           const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
-          const bg = picked ? (coarse ? gray(ground, 9) : mix(ground, theme.accent, 0.5)) : tone ? (coarse ? tone : mix(ground, tone, 0.4)) : coarse ? gray(ground, level + 1) : mix(ground, theme.accent, 0.04 + 0.08 * level)
-          const ink = tone && coarse ? ground : theme.fg || (light ? '#000000' : '#ffffff')
-          return { name: dim && !tone && !picked ? theme.muted : ink, size: ink, bold: picked || Boolean(tone) || tile.depth === 0, bg, rank: picked ? 2 : tone ? 1 : 0 }
+          const bg = shade ? mix(ground, picked ? theme.accent : tone || theme.accent, picked ? 0.5 : tone ? 0.4 : 0.04 + 0.08 * level) : picked ? theme.accent : tone || (tile.depth ? 'ansi256(8)' : 'ansi256(0)')
+          const ink = !shade && (picked || tone) ? 'ansi256(0)' : theme.fg
+          return { name: dim && !tone && !picked && !tile.depth ? theme.muted : ink, size: ink, bold: picked || Boolean(tone) || tile.depth === 0, bg, rank: picked ? 2 : tone ? 1 : 0 }
         }
         status = pick ? `${pick.name} ${formatSize(pick.bytes)} ${pct(pick.bytes)}` : `${formatSize(total)}${scan.done ? '' : ' …'}`
         content = tiles.length

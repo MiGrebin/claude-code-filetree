@@ -159,7 +159,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
       flexDirection="row"
       height={1}
       overflow="hidden"
-      backgroundColor={r.id && r.id === props.active ? props.activeBg : r.id && i === state.hover ? props.hoverBg : undefined}
+      backgroundColor={r.id && r.id === props.active ? props.activeBg : r.id && i === state.hover ? props.hoverBg || undefined : undefined}
     >
       <Box flexShrink={1} overflow="hidden">
         {r.left.map(draw)}

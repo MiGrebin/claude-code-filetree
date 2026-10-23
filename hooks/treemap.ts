@@ -38,13 +38,6 @@ export function parseDu(text: string, dir: string): { total?: number; items: Usa
   return { total, items: [...top.values()].map(u => ({ ...u, kids: kids.get(u.path) ?? [] })) }
 }
 
-export function gray(ground: string, steps: number): string {
-  const v = parseInt(ground.slice(1), 16)
-  const lum = (((v >> 16) & 255) + ((v >> 8) & 255) + (v & 255)) / 3
-  const at = Math.max(0, Math.min(23, Math.round((lum - 8) / 10) + (lum < 128 ? steps : -steps)))
-  return `#${(8 + 10 * at).toString(16).padStart(2, '0').repeat(3)}`
-}
-
 export function mix(from: string, to: string, t: number): string {
   const rgb = (hex: string) => {
     const v = parseInt(hex.slice(1), 16)
