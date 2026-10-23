@@ -1588,11 +1588,11 @@ export const register: Register = (on, options) => {
     }
     const rootCounts = t.top ? countSegs(t.counts[t.root]) : []
     const buttons = [
-      { id: 'up', label: unicode ? '↑' : '\u{ebff}', dim: true, hint: 'parent folder' },
-      { id: 'cwd', label: unicode ? '⌂' : '\u{eb06}', dim: !follow, hint: 'follow the cwd' },
+      { id: 'up', label: unicode ? '△' : '\u{ebff}', dim: true, hint: 'parent folder' },
+      { id: 'cwd', label: unicode ? '◎' : '\u{eb06}', dim: !follow, hint: 'follow the cwd' },
       { id: 'refresh', label: unicode ? '⮌' : '\u{eb37}', dim: true, hint: 'reload tree and git' },
       { id: 'hidden', label: unicode ? (t.showHidden ? '⊙' : '○') : t.showHidden ? '\u{f0b95}' : '\u{eae7}', dim: !t.showHidden, hint: t.showHidden ? 'hide hidden files' : 'show hidden files' },
-      { id: 'size', label: unicode ? 'Σ' : '\u{ea90}', dim: !t.showSize, hint: t.showSize ? 'show dates' : 'show sizes' },
+      { id: 'size', label: unicode ? '◫' : '\u{ea90}', dim: !t.showSize, hint: t.showSize ? 'show dates' : 'show sizes' },
       { id: 'collapse', label: unicode ? '⊟' : '\u{eac5}', dim: true, hint: 'collapse all' },
       ...(t.selected ? [{ id: 'unselect', label: unicode ? '⊘' : '\u{eabd}', dim: false, hint: 'clear selection' }] : []),
     ]
