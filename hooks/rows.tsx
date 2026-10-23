@@ -11,7 +11,7 @@ export type RowsProps = {
   spinner?: string[]
   pointer?: boolean
   bar?: { pos: number; size: number; thumb: string; track: string }
-  preview?: { text: string; path: string; startLine: number; markdown: boolean; segments?: { title: string; source: string }[]; titleColor?: string }
+  preview?: { text: string; path: string; startLine: number; markdown: boolean; segments?: { title: string; source: string }[]; titleColor?: string; rows?: number }
 }
 type Local = { hover: number; phase: number; drag: boolean; ref: { stop?: () => void; unpoint?: () => void } }
 
@@ -49,6 +49,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
     state.ref.unpoint = undefined
   } else state.ref.unpoint = surface.onPointer(e => {
     const cur = surface.state ?? state
+    if (props.preview && (e.type === 'enter' || e.type === 'leave')) surface.post({ over: e.type === 'enter' })
     const span = Math.max(1, props.rows.length - 1)
     const onBar = Boolean(props.bar) && e.x >= surface.columns - 1
     if (props.bar && (cur.drag || (onBar && e.type === 'down' && (e.button ?? 'left') === 'left'))) {
@@ -101,7 +102,24 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
         </Column>
       )
     }
-    return p.markdown ? <Markdown text={p.text} /> : <Code source={p.text} path={p.path} startLine={p.startLine} wrap="truncate-end" />
+    const body = p.markdown ? <Markdown text={p.text} /> : <Code source={p.text} path={p.path} startLine={p.startLine} wrap="truncate-end" />
+    if (!p.rows) return body
+    const bar = props.bar
+    return (
+      <Column flexDirection="row" height={p.rows} overflow="hidden">
+        <Column flexGrow={1} flexShrink={1} flexDirection="column" overflow="hidden">
+          {body}
+        </Column>
+        {bar ? (
+          <Column flexDirection="column" flexShrink={0}>
+            {Array.from({ length: p.rows }, (_, i) => {
+              const on = i >= bar.pos && i < bar.pos + bar.size
+              return <Title color={on ? bar.thumb : bar.track}>{on ? '┃' : '│'}</Title>
+            })}
+          </Column>
+        ) : null}
+      </Column>
+    )
   }
   const frames = props.spinner?.length ? props.spinner : FRAMES
   const draw = (s: Seg) => {

@@ -1815,3 +1815,112 @@ test('/filetree on a tree hidden behind another tab brings it forward instead of
   expect(JSON.stringify(r)).toContain('File tree on')
   expect(opens.slice(before).some((o: any) => o.id === 'filetree' && o.focus === true)).toBe(true)
 })
+
+const PNG_HEAD = '137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82 0 0 3 32 0 0 1 144'
+
+function peekOf(tree: any): any {
+  if (!tree || typeof tree !== 'object') return undefined
+  if (tree.type === 'Client' && tree.props?.props?.preview?.rows) return tree.props.props
+  for (const c of [tree.children ?? []].flat()) {
+    const hit = peekOf(c)
+    if (hit) return hit
+  }
+  return undefined
+}
+
+test('split preview: the header button shows the file under the cursor below a rule, the wheel, Page Down, f and End scroll it with a scrollbar, pictures draw as images, and the button hides it', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k', XDG_RUNTIME_DIR: '/run/user/1000' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.ts', 'file'], ['b.png', 'file'], ['c.mp4', 'file']] },
+    files: { [`${root}/a.ts`]: `const a = 1\n${'a++\n'.repeat(200)}` },
+    stdout: { 'od -An -tu1': PNG_HEAD },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).not.toContain('──')
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  let shown = JSON.stringify(await ui.drawn())
+  expect(shown).toContain('──')
+  expect(shown).toContain('no file selected')
+  await ui.post({ key: 'k' }, { in: 'rows' })
+  await clock.settle()
+  let peek = peekOf(await ui.drawn())
+  expect(peek.preview.text).toContain('const a = 1')
+  expect(peek.preview.startLine).toBe(1)
+  expect(peek.bar.pos).toBe(0)
+  expect(JSON.stringify(await ui.drawn())).toContain('1–16/202')
+  await ui.post({ key: 'pagedown' }, { in: 'rows' })
+  await clock.settle()
+  expect(peekOf(await ui.drawn()).preview.startLine).toBe(16)
+  await ui.post({ key: 'f' }, { in: 'rows' })
+  await clock.settle()
+  expect(peekOf(await ui.drawn()).preview.startLine).toBe(31)
+  await $.ui.scroll({ component: 'Pane', requestId: 'filetree', by: 1 } as any)
+  await clock.settle()
+  expect(peekOf(await ui.drawn()).preview.startLine).toBe(31)
+  await ui.post({ over: true }, { in: 'peek' })
+  await $.ui.scroll({ component: 'Pane', requestId: 'filetree', by: 1 } as any)
+  await clock.settle()
+  expect(peekOf(await ui.drawn()).preview.startLine).toBe(34)
+  await ui.post({ key: 'end' }, { in: 'peek' })
+  await clock.settle()
+  peek = peekOf(await ui.drawn())
+  expect(peek.preview.startLine).toBe(187)
+  expect(peek.bar.pos + peek.bar.size).toBe(16)
+  await ui.post({ over: false }, { in: 'peek' })
+  await ui.post({ key: 'j' }, { in: 'rows' })
+  await clock.settle()
+  await clock.settle()
+  shown = JSON.stringify(await ui.drawn())
+  expect(shown).toContain(`"file":"${root}/b.png","format":"png"`)
+  expect(shown).toContain('800×400')
+  expect(shown).toContain('"columns":59,"rows":15')
+  expect(ran.some(a => a[0] === 'sh' && a.includes(`${root}/b.png`))).toBe(false)
+  await ui.post({ key: 'j' }, { in: 'rows' })
+  await clock.settle()
+  await clock.settle()
+  shown = JSON.stringify(await ui.drawn())
+  expect(shown).toContain('"file":"/run/user/1000/filetree-preview/')
+  expect(ran.some(a => a[0] === 'sh' && a.includes(`${root}/c.mp4`) && a.at(-1) === 'video')).toBe(true)
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  shown = JSON.stringify(await ui.drawn())
+  expect(shown).not.toContain('──')
+  expect(shown).not.toContain('"Image"')
+  await ui.unmount()
+})
+
+test('split preview at the top: p shows it under the header with the rule below it, and a picture that cannot be decoded says why', { timeoutMs: 20_000, options: { split: 'top' } }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.md', 'file'], ['b.webp', 'file']] },
+    files: { [`${root}/a.md`]: '# Notes\n\nhello' },
+    exits: { sh: [3, 'no magick or ffmpeg to decode it'] },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await ui.post({ key: 'k' }, { in: 'rows' })
+  await ui.post({ key: 'p' }, { in: 'rows' })
+  await clock.settle()
+  const drawn = await ui.drawn() as any
+  const split = drawn.children[1]
+  const order = JSON.stringify(split)
+  expect(order.indexOf('a.md')).toBeLessThan(order.indexOf('──'))
+  expect(peekOf(drawn).preview.markdown).toBe(true)
+  await ui.post({ key: 'j' }, { in: 'rows' })
+  await clock.settle()
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).toContain('no magick or ffmpeg to decode it')
+  await ui.post({ key: 'p' }, { in: 'rows' })
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).not.toContain('──')
+  await ui.unmount()
+})
