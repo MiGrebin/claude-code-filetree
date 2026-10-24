@@ -93,10 +93,11 @@
     "shortcuts": {
       "type": "string",
       "title": "Shortcut row",
-      "description": "on: the j/k/h/l/open/search row at the bottom of the pane. off: the row is hidden and the tree gets it; the keys still work with the tree focused.",
-      "default": "on",
+      "description": "auto: the shortcuts stay hidden until you press ? in the tree, then show on the footer row beside the selected entry for 10 seconds; ? again hides them. always: they always show. off: they never show. The keys work in every mode with the tree focused.",
+      "default": "auto",
       "options": [
-        "on",
+        "auto",
+        "always",
         "off"
       ]
     },

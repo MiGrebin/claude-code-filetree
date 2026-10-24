@@ -51,6 +51,7 @@ const FLASH_MS = 2700
 const RUNNING_MAX_MS = 600_000
 const NO_REPO_DEPTH = 4
 const DOUBLE_MS = 450
+const SHORTCUTS_MS = 10_000
 const FIND_LIMIT = 200
 const ROWS_BUDGET = 80_000
 const READ_REVEAL_LIMIT = 12
@@ -142,7 +143,9 @@ let showAge = false
 let showHints = true
 let ignoreNames: string[] = []
 let searchGap = true
-let showShortcuts = true
+let shortcutsSetting: 'auto' | 'always' | 'off' = 'auto'
+let shortcutsShown = false
+let shortcutsTimer = 0
 let treemapSetting: 'auto' | 'image' | 'cells' | 'off' = 'auto'
 let kittyTerm = false
 let imageDenied = false
@@ -1398,11 +1401,23 @@ async function pickTile($: EngineInterface, id: string): Promise<void> {
     await revealPaths($, [id])
     if ((await get($)).nodes.find(n => n.id === id)?.kind === 'dir') return
     const title = `Files: ${t.root.split('/').pop() || t.root}`
-    $.clock.after(100, () => void $.ui.open({ id: PANE, title, focus: true }).then(() => $.ui.focus({ requestId: PANE, key: showShortcuts ? 'nav-o' : 'rows' })).catch(() => {}))
+    $.clock.after(100, () => void $.ui.open({ id: PANE, title, focus: true }).then(() => $.ui.focus({ requestId: PANE, key: shortcutsSetting === 'always' ? 'nav-o' : 'rows' })).catch(() => {}))
     return
   }
   const kind = await $.fs.stat(id).then(s => s.kind, () => 'file')
   mapLock = kind === 'dir' ? { anchor: id, pick: '', cursor: t.cursor } : { anchor: mapAnchor, pick: id, cursor: t.cursor }
+  void $.ui.invalidate('ui.render')
+}
+
+function toggleShortcuts($: EngineInterface): void {
+  if (shortcutsSetting !== 'auto') return
+  const mine = ++shortcutsTimer
+  shortcutsShown = !shortcutsShown
+  if (shortcutsShown) $.clock.after(SHORTCUTS_MS, () => {
+    if (mine !== shortcutsTimer) return
+    shortcutsShown = false
+    void $.ui.invalidate('ui.render')
+  })
   void $.ui.invalidate('ui.render')
 }
 
@@ -1439,7 +1454,7 @@ function parkPreview($: EngineInterface): void {
 
 async function closePreview($: EngineInterface): Promise<void> {
   await patch($, () => ({ preview: '', previewTop: 0 }))
-  $.clock.after(100, () => void $.ui.focus({ requestId: PANE, key: showShortcuts ? 'nav-o' : 'rows' }).catch(() => {}))
+  $.clock.after(100, () => void $.ui.focus({ requestId: PANE, key: shortcutsSetting === 'always' ? 'nav-o' : 'rows' }).catch(() => {}))
 }
 
 async function jumpDiff($: EngineInterface, dir: 1 | -1): Promise<void> {
@@ -1539,7 +1554,7 @@ async function toggle($: EngineInterface, n: FileNode): Promise<void> {
   await patch($, t => {
     const open = new Set(t.expanded)
     if (n.kind === 'dir') open.has(n.id) ? open.delete(n.id) : open.add(n.id)
-    return { expanded: [...open], cursor: n.id, selected: n.kind === 'dir' ? t.selected : n.id }
+    return { expanded: [...open], cursor: n.id, selected: n.id }
   })
   void watchTree($)
 }
@@ -1569,7 +1584,7 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   const cur = rows[at]?.node
   const move = (d: number) => {
     const target = rows[Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + d))]
-    return target ? patch($, () => ({ cursor: target.node.id, scroll: null })) : Promise.resolve()
+    return target ? patch($, () => ({ cursor: target.node.id, selected: target.node.id, scroll: null })) : Promise.resolve()
   }
   const page = Math.max(1, peekRows - 1)
   const peek: Record<string, number> = { f: page, b: -page, pageup: -page, pagedown: page }
@@ -1581,13 +1596,15 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   else if (key === 'pagedown') await move(10)
   else if (key === 'home') await move(-rows.length)
   else if (key === 'end') await move(rows.length)
+  else if (key === '?') toggleShortcuts($)
+  else if (key === 's') await $.ui.focus({ requestId: PANE, key: 'q' })
   else if (cur && key === 'd') await diffFile($, cur.id)
   else if (cur && (key === 'y' || key === 'Y')) await copyPath($, cur.id, key === 'Y' || shift, surface)
   else if (cur && (key === 'right' || key === 'l') && cur.kind === 'dir' && !t.expanded.includes(cur.id)) await toggle($, cur)
   else if (cur && (key === 'left' || key === 'h')) {
     if (cur.kind === 'dir' && t.expanded.includes(cur.id)) await toggle($, cur)
-    else if (cur.parent !== t.root) await patch($, () => ({ cursor: cur.parent }))
-  } else if (cur && key === 'return') await (cur.kind !== 'dir' ? openNode($, cur) : toggle($, cur))
+    else if (cur.parent !== t.root) await patch($, () => ({ cursor: cur.parent, selected: cur.parent }))
+  } else if (cur && (key === 'return' || key === 'o')) await (cur.kind !== 'dir' ? openNode($, cur) : toggle($, cur))
   else if (cur && (key === ' ' || key === 'space')) await (cur.kind !== 'dir' && (await osName($)) === 'darwin' ? quickLook($, cur.id) : toggle($, cur))
 }
 
@@ -1610,7 +1627,7 @@ async function pressHeader($: EngineInterface, id: string): Promise<void> {
   } else if (id === 'hidden') await patch($, cur => ({ showHidden: !cur.showHidden }))
   else if (id === 'size') await patch($, cur => ({ column: cur.column === 'date' ? 'size' : cur.column === 'size' ? 'loc' : 'date' }))
   else if (id === 'collapse') await patch($, cur => ({ expanded: [], nodes: dropBelow(cur.nodes, cur.nodes.filter(x => x.parent === cur.root && x.kind === 'dir').map(x => x.id)) }))
-  else if (id === 'unselect') await patch($, () => ({ selected: '' }))
+  else if (id === 'unselect') await patch($, () => ({ selected: '', cursor: '' }))
   else if (id === 'external' && t.preview) await openFile($, t.preview, { mode: '' })
   else if (id === 'split') await toggleSplit($)
 }
@@ -1630,7 +1647,8 @@ export const register: Register = (on, options) => {
   showHints = options?.hints !== 'off'
   ignoreNames = typeof options?.ignore === 'string' ? options.ignore.split(/[\s,]+/).filter(Boolean) : []
   searchGap = options?.spacing !== 'off'
-  showShortcuts = options?.shortcuts !== 'off'
+  shortcutsSetting = options?.shortcuts === 'always' || options?.shortcuts === 'off' ? options.shortcuts : 'auto'
+  shortcutsShown = shortcutsSetting === 'always'
   treemapSetting = options?.treemap === 'image' || options?.treemap === 'cells' || options?.treemap === 'off' ? options.treemap : 'auto'
   openWithSetting = typeof options?.open === 'string' ? options.open : ''
   binariesInDefaultApp = options?.binaries === 'default app'
@@ -1996,12 +2014,13 @@ export const register: Register = (on, options) => {
     const width = Math.max(24, e.props.bodyColumns)
     const rows = visibleRows(t)
     const body = e.props.scroll?.bodyRows ?? 40
-    const chrome = 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
+    const footer = t.nodes.find(n => n.id === t.cursor)?.id ?? (t.selected || '')
+    const chrome = 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown ? 1 : 0)
     const spare = body - chrome - 5
     const splitRows = t.split && !nativeScroll && spare >= 6 && (treemapSetting !== 'off' || Boolean(peekTarget(t))) ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
     splitShown = splitRows > 0
     if (!splitShown) overPeek = false
-    const fixed = splitRows + 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
+    const fixed = splitRows + 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown ? 1 : 0)
     const room = nativeScroll ? Math.max(1, rows.length) : Math.max(5, (e.props.scroll?.bodyRows ?? 40) - fixed)
     const isLit = (id: string) => bright.has(id) || dimmed.has(id)
     const focus = followClaude && t.flashOn ? ([...t.flash].reverse().find(id => id !== BRANCH_ROW) ?? t.cursor) : t.cursor
@@ -2350,7 +2369,30 @@ export const register: Register = (on, options) => {
     }
     const split = await peek()
 
-    const park = () => void $.ui.focus({ requestId: PANE, key: showShortcuts ? 'nav-o' : 'rows' }).catch(() => {})
+    const park = () => void $.ui.focus({ requestId: PANE, key: shortcutsSetting === 'always' ? 'nav-o' : 'rows' }).catch(() => {})
+    const footerName = footer ? (footer !== t.root && inside(t.root, footer) ? footer.slice(t.root.endsWith('/') ? t.root.length : t.root.length + 1) : shortPath(footer)) : ''
+    const allKeys: { key: string; label: string; press: () => void }[] = [
+      { key: 'jkhl', label: 'move', press: () => undefined },
+      { key: 'o', label: 'open', press: () => void navigate($, 'return') },
+      { key: 'd', label: 'diff', press: () => void navigate($, 'd') },
+      { key: 's', label: 'search', press: () => void $.ui.focus({ requestId: PANE, key: 'q' }) },
+      ...(e.surface === 'desktop' ? [] : [{ key: 'p', label: 'preview', press: () => void navigate($, 'p', false, e.surface).then(park) }]),
+      { key: 'y', label: 'copy path', press: () => void navigate($, 'y', false, e.surface).then(park) },
+      ...(shortcutsSetting === 'auto' ? [{ key: '?', label: 'hide', press: () => undefined }] : []),
+    ]
+    const picked = new Set<string>()
+    if (shortcutsShown) {
+      let room = width - (footerName ? 10 + Math.min(footerName.length, 6) : 0) - (latest ? 6 + latest.label.length : 0)
+      for (const key of ['?', 'jkhl', 'd', 'o', 's', 'p', 'y']) {
+        const k = allKeys.find(x => x.key === key)
+        if (!k) continue
+        const w = (key === 'jkhl' ? 7 : key.length) + k.label.length + 4
+        if (w > room) continue
+        room -= w
+        picked.add(key)
+      }
+    }
+    const keys = allKeys.filter(k => picked.has(k.key))
 
     return (
       <Box flexDirection="column" minHeight={Math.max(1, e.props.scroll?.bodyRows ?? 1)} backgroundColor={theme.bg || undefined}>
@@ -2391,28 +2433,27 @@ export const register: Register = (on, options) => {
         />
         <Box flexGrow={1} />
         {splitAt === 'bottom' ? split : null}
-        {(t.selected || latest) && (
-          <Box flexDirection="row">
-            {t.selected ? (
+        {(footer || latest || shortcutsShown) && (
+          <Box flexDirection="row" height={1} overflow="hidden">
+            {footerName ? <Box flexShrink={0}><Text dimColor={!light} color={light ? theme.muted : undefined}>selected: </Text></Box> : null}
+            {footerName ? (
               <Box flexShrink={1}>
-                <Text dimColor={!light} color={light ? theme.muted : undefined} wrap="truncate-start">
-                  selected: {t.selected !== t.root && inside(t.root, t.selected) ? t.selected.slice(t.root.endsWith('/') ? t.root.length : t.root.length + 1) : shortPath(t.selected)}
-                </Text>
+                <Text dimColor={!light} color={light ? theme.muted : undefined} wrap="truncate-start">{footerName}</Text>
               </Box>
             ) : null}
             <Box flexGrow={1} />
             {latest && chip(latest)}
+            {keys.length ? (
+              <Box flexDirection="row" flexShrink={0} gap={2} marginLeft={2}>
+                {keys.map(k => k.key === 'jkhl'
+                  ? <Text key="nav-move" dimColor><Text color={theme.accent}>j k h l</Text>: move</Text>
+                  : k.key === '?'
+                  ? <Button key="nav-help" plain dimColor label={`?: ${k.label}`} onPress={() => { toggleShortcuts($); park() }} />
+                  : <Button key={`nav-${k.key}`} plain dimColor autoFocus={k.key === 'o' && shortcutsSetting === 'always' ? true : undefined} hotkey={k.key} label={k.label} onPress={k.press} />)}
+              </Box>
+            ) : null}
           </Box>
         )}
-        {showShortcuts ? (
-        <Box flexDirection="row" gap={2}>
-          {([['j', '↓', '\u{ea9a}'], ['k', '↑', '\u{eaa1}'], ['h', '←', '\u{ea9b}'], ['l', '→', '\u{ea9c}']] as const).map(([k, plain, nerd]) => (
-            <Button key={`nav-${k}`} plain dimColor hotkey={k} label={unicode ? plain : nerd} onPress={() => void navigate($, k).then(park)} />
-          ))}
-          <Button key="nav-o" plain dimColor autoFocus hotkey="o" label={unicode ? 'open' : '\u{ea94} open'} onPress={() => void navigate($, 'return')} />
-          <Button key="nav-s" plain dimColor hotkey="s" label="search" onPress={() => void $.ui.focus({ requestId: PANE, key: 'q' })} />
-        </Box>
-        ) : null}
       </Box>
     )
   })
