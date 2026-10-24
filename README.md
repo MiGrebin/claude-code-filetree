@@ -15,6 +15,19 @@
   <img src="media/filetree-shimmer.gif" alt="filetree shimmering the file Claude is editing" width="900">
 </p>
 
+<table>
+  <tr>
+    <th>Preview</th>
+    <th>Treemap</th>
+    <th>Diff</th>
+  </tr>
+  <tr>
+    <td><img src="docs/media/preview.gif" alt="Previewing Markdown files under and above the tree" width="300"></td>
+    <td><img src="docs/media/treemap.gif" alt="Selecting and drilling into treemap boxes, and a box lit while Claude reads the file" width="300"></td>
+    <td><img src="docs/media/diff.gif" alt="d shows the diff of a file and of a folder" width="300"></td>
+  </tr>
+</table>
+
 > [!NOTE]
 > filetree is a Claude Code **mod** and needs **Claude Code 2.1.287+**. It shows in the right sidebar, which in the terminal needs the fullscreen layout (`/tui fullscreen`) and a terminal at least 110 columns wide; the Desktop app docks it on its own. `/filetree` shows or hides it, and `/filetree open` opens it, or brings it forward from behind another tab, without hiding it. Tested on Linux, macOS and Windows; mods don't load in WSL sessions of the Desktop app.
 
@@ -36,84 +49,116 @@ Or inside a Claude Code session:
 /plugin install filetree@claude-code-filetree
 ```
 
-Installed it as `filetree@filetree` before the repository was renamed? Nothing to do: that install keeps loading and keeps receiving updates.
-
-Install fails with `Unrecognized key: "options"`? Your Claude Code is older than 2.1.287: run `claude update`, then install again.
+An install fails with `Unrecognized key: "options"` on Claude Code older than 2.1.287: run `claude update`, then install again.
 
 ## Features
 
-- Interactive file tree for the working directory where you're using Claude Code; it follows the cwd, or `/filetree <path>` pins another folder
-- Search the file tree, including folders you have not opened yet
-- Git status per file and folder in color, with exact lines changed (`+N` `-N`) on modified files and `?:N M:N D:N` file counts on folders
-- Branch, upstream and ahead/behind in the header
-- Visual indicator of Claude reads and searches (purple), writes (orange) and commits (green); collapsed folders open to show the file
-
-  <img src="media/filetree-read.gif" alt="Files shimmer purple while Claude reads and searches them" width="800">
-
-- Git and GitHub operations via `git` and `gh` (commit, push, pull, checkout, merge, PR and more) shown as a status at the bottom of the pane
+- File tree of the cwd, or of a folder pinned with `/filetree <path>`, with search across unopened folders
+- Git status per file and folder, line counts on changed files, and branch, upstream and ahead/behind in the header
+- Claude's reads (purple), writes (orange) and commits (green) shimmer in the tree; collapsed folders open to show the file
+- Git and GitHub commands Claude runs show as a status line at the bottom of the pane
+- The selected file goes to Claude as context, and `@path` in a prompt reveals that file
+- Right column cycles date, size and lines of code from the header button
+- Split preview under or above the tree: highlighted code, rendered Markdown, images, video poster frames, and PDF and Word pages turned with `[` and `]`
+- Treemap of the folder under the cursor in the same split, sized by bytes or by lines, with Claude's activity lit
+- `d` shows the diff of a file or of every changed file in a folder, in the pane or in a tool you name
+- Open files in their default app, an editor in a tmux or herdr pane, or any command
+- Changes made outside Claude show at once on Linux through `inotifywait`
+- Draws in the terminal's own palette, with Nerd Font, plain or text glyphs
 
   <img src="media/filetree-git.gif" alt="A committed file shimmers green and the footer shows the commit" width="800">
 
-- Selection-aware: the selected file is passed to Claude as context through a `prompt.submit` hook, and `@path` mentions in a prompt reveal that file in the tree
+### Preview and treemap
 
-  <img src="media/filetree-ask.gif" alt="Selecting config.yaml in the tree and asking Claude what it changed there" width="800">
+`p` or the header button shows the split. On a file it shows the file; on a folder, the root row or nothing it shows the treemap.
 
-- File and folder sizes: the `Σ` header button swaps the date column for sizes; folders show their disk usage (`du`, or a summed listing on Windows), worked out in the background for the rows on screen and refreshed after Claude writes
-- Changes made outside Claude, in a shell or another app, show within a fraction of a second on Linux: the root and every open folder are watched with `inotifywait` (from inotify-tools) when it is on PATH. Elsewhere they show on the next click or refresh
-- Double-click a file to open it in its default app
-- On macOS, Space on a file shows it in Quick Look
-- Click to select, arrow keys or `j`/`k`/`h`/`l` to move through the tree
-- Hover a header button to see what it does
-- Light on large repos: outside a repo it only checks once whether one exists, and every git call is scoped to the cwd
-- Nerd Font icons with a plain Unicode fallback
-- The pane draws in your terminal's own colors: no background of its own, and folders, git status, dates and the treemap use the terminal's ANSI palette, so it matches whatever theme the terminal runs
-- Your own colors through the Palette setting, laid over the terminal's
-- A split preview of the file under the cursor, under the tree or above it: the header button or `p` shows and hides it. Code is highlighted and Markdown rendered, read-only, with a scrollbar; the wheel over it, `f`/`b` or Page Up/Down scroll it. Images (PNG, JPEG, GIF, WebP, BMP, TIFF, AVIF, HEIC and more) draw as pictures through the kitty graphics protocol in Ghostty and kitty, and a video shows a poster frame; elsewhere a line names the file instead. PNGs draw as they are; other formats are converted once with `magick` or `ffmpeg`, and video frames come from `ffmpeg`, so those need one of them on PATH; each file is decoded only as the format its extension names; GIFs and videos show one still frame, not playback. PDFs, Word documents (`.docx`, `.doc`), `.odt` and `.rtf` draw one page at a time, with `p N/M` above it; `[` and `]` turn the page, and the next page is drawn in the background. Pages come from `pdftoppm`, or `gs` with `-dSAFER` when it is missing; office files are converted to PDF once per change with `soffice`, under a private LibreOffice profile in the preview cache so your own LibreOffice is never touched, and a `.docx` shows its text through `pandoc` while the first page is converted. Each render has a time limit and stops when the cursor moves to another file. A PDF that needs a password says encrypted. In tmux, herdr and terminals without the kitty graphics protocol a PDF shows the text of its page through `pdftotext`, still turned with `[` and `]`, and a `.docx` its text through `pandoc`. Linux and macOS only for pictures, and the Desktop app has no split preview
-- A disk usage treemap in the split preview while the cursor is on a folder, or on nothing: one box per child, sized by `du`, largest first, each with its name, size and share, and the largest children of big folders drawn inside them. In Ghostty and kitty the map is a picture drawn through the kitty graphics protocol: boxes are placed to the pixel with one even gutter of the terminal's background between sibling boxes, between a box's edge and the boxes inside it, above and below its label and around the whole map, top-level boxes filled strongly with the terminal's accent color and boxes inside them kept close to the background, and labels are drawn bold into the picture in the Terminus bitmap font, in whichever of the terminal's foreground, background or bright white reads best on the box, at 4.5:1 contrast or more. The colors come from the Palette setting, then from Ghostty's own config (including a `--config-file` it was started with), then the standard ANSI colors. Elsewhere, inside tmux and herdr, and with Treemap set to `cells`, boxes are terminal cells, filled with no outlines and separated by the same even gutter, two columns across and one row down so it looks equally wide both ways on cells about twice as tall as wide: top-level boxes in the terminal's blue with black labels, boxes inside them in its bright black with bright white labels; in Ghostty, or with `bg` and `accent` set in the Palette, the cells use the same colors as the picture. The selected box is filled with the foreground color. Either way a label sits one gutter in from the box's corner and is left out when the name does not fit. Children too small for a labelled box share one `+N` box. Click a box to select it: it fills with the selected color and the tree cursor moves to that entry, opening its parent folders, while the map stays on the folder it shows. Double-click a folder's box, or press Enter or `l` with the map focused after a click, to map that folder. After clicking a file's box, `p` shows its preview. Otherwise the map shows while the cursor is on a folder, on the root row or on nothing, and moving the cursor onto a file with the keyboard or a tree click shows its preview. The folder name above the map goes up a level, up to the tree's root. Files and folders Claude reads or edits fill their box with the tree's activity color. Hidden and ignored names still count, drawn dim, because they are often what fills the disk. Sizing runs in the background, draws as `du` reports each child, is cached per folder, runs again once a burst of Claude's writes inside it settles or when you press refresh, and stops when the cursor moves on. Windows sums sizes through file listings instead of `du` and draws one level
-- `d` on a changed file shows its diff, in the pane or in hunk, lazygit or any diff tool you name
+<img src="docs/media/preview-media.gif" alt="An image, a video, a PDF turned to page 2 and a Word document in the preview" width="800">
 
-  <img src="media/filetree-diff.gif" alt="Pressing d on a file and a folder shows their diffs in the pane, and j/k jump between changed files" width="800">
+```mermaid
+flowchart LR
+  C[Cursor] -->|file| P[File preview]
+  C -->|folder, root row or nothing| T[Treemap]
+  T -->|click a box| S[Select the entry]
+  T -->|double-click a folder| D[Map that folder]
+  T -->|folder name| U[Map the parent]
+```
 
+<img src="docs/media/columns.gif" alt="The size button cycles dates, sizes and lines of code, and the treemap follows" width="800">
 
-### Keyboard navigation
+<img src="docs/media/live-updates.gif" alt="A file created and removed in a shell shows in the tree and the treemap" width="800">
 
-The root folder sits at the top of the tree with a folder glyph (the repository glyph in a git root, `■` with plain or text glyphs). Click it, or press `k` on the first row, to select it; the split preview then maps the whole root. With the filetree pane focused, use `j`/`k` to move down/up, `l` to expand a folder, and `h` to collapse it or move to its parent. `o` or Enter opens a file or toggles a folder. Press `s` to focus search, type a query, then Enter to jump to the first match and return focus to the tree controls. `p` shows or hides the split preview; while it shows, `f`/`b` and Page Up/Down scroll it a page, and on a PDF or office document `[`/`]` go to the previous or next page (the footer shows `[ ]: page` while one is previewed). On a folder the preview is the treemap. `d` shows the diff of the entry under the cursor (see Diff with), `y` copies its relative path and `Y` its absolute path. `?` shows these shortcuts at the left of the footer row for 10 seconds; while they are hidden the row shows `?: shortcuts` there. The footer names the entry under the cursor at its right, cut from the front when the row is short.
+### Open in tmux or herdr
 
-### Resizing the pane
+<img src="docs/media/multiplexer.gif" alt="Enter opens hoard.ts in nvim in a tmux pane to the right of Claude" width="800">
 
-You can resize the pane with the mouse, or by setting custom `pane:grow` or `pane:shrink` keybindings in `keybindings.json`
+### Keys
 
-<p align="center">
-  <img src="media/filetree-resize.gif" alt="Dragging the filetree pane edge to resize it" width="900">
-</p>
+With the tree focused:
+
+```yaml
+j / k:        move down / up; k on the first row selects the root
+h / l:        collapse or go to parent / expand
+o, Enter:     open a file or toggle a folder
+s:            focus search
+p:            show or hide the preview or treemap
+f / b:        scroll the preview a page
+"[ / ]":      previous / next page of a PDF or Word document
+d:            diff of the entry under the cursor
+y / Y:        copy the relative / absolute path
+"?":          show the shortcuts in the footer for 10 seconds
+Space:        Quick Look on macOS
+```
+
+<img src="docs/media/shortcuts.gif" alt="? shows the shortcuts in the footer, and k from the first row selects the root" width="800">
+
+Resize the pane with the mouse or the `pane:grow` and `pane:shrink` keybindings.
 
 ## Settings
 
-All settings are in `/config` under filetree.
+All settings are in `/config` under filetree, each with its own description there.
 
-- **Claude activity:** what shimmers: `reads and writes` (default), `writes`, `reads` or `none`. Git status, line counts and the git status at the bottom always show.
-- **Follow Claude:** `on` (default) scrolls the tree to what Claude reads, writes or commits; `off` keeps the view where you put it, and highlights still show.
-- **Open at start:** `on` (default) opens the pane when a session starts; `off` keeps it closed until you run `/filetree`.
-- **Right column:** `date` (default), `age`, `size` or `loc`; what the right column shows when a session starts. `age` shows how long ago a file changed in a few characters: `now`, `12m`, `3h`, `5d`, then the day (`Oct 9`) past a week and the year past a year. `loc` shows lines of code: the non-blank lines of code, markup, config and docs files, picked by extension the way tokei and scc pick languages, with lock files, minified files and data such as CSV left out; pictures, video and binaries show nothing and a folder shows the sum of everything under it. Lines are counted in the background with `find` and `grep`, cached, and counted again when files change, by Claude or outside it. The size button in the header cycles the dates or ages, sizes and lines, and while it shows lines the treemap sizes its boxes by lines instead of bytes.
-- **Hints:** `on` (default) shows a line under the header outside a git repo saying git status starts after `git init`; `off` hides it.
-- **Search spacing:** on (default) puts a blank line above and below the search bar; off gives the tree those two rows.
-- **Shortcut row:** auto (default) keeps the shortcuts hidden until you press `?` in the tree, then shows `j`/`k`/`h`/`l`/open/diff/copy path/preview/search at the left of the footer row for 10 seconds, the selected entry staying at the right; `?` again hides them, and while hidden the row shows a `?: shortcuts` hint. always shows them; off never does. The keys work in every mode with the tree focused.
-- **Open with:** empty (default) opens files in their default app on double-click or Enter, including inside tmux. `editor` opts into `$VISUAL`, then `$EDITOR`, then `vi` in tmux or herdr on Linux/macOS. In tmux, nvim reuses a running nvim in the same tmux server and session; otherwise the editor opens in a new window in the file's folder. In herdr without tmux, the editor opens in a new pane to the right of Claude's pane, in the file's folder, and that pane closes when the editor exits; the file name reaches the editor through the pane's environment, not through its command line, so names with spaces or shell characters are safe. Outside tmux and herdr it shows a notice instead of opening the file: a mod cannot hand Claude Code's terminal to another program, so a terminal editor needs a tmux window or a herdr pane to run in. For a GUI editor, or outside both, use a command instead, such as `code -g {path}` or one that opens your terminal's new window. Editor commands can include arguments; quote an executable path or argument that contains spaces, for example `EDITOR='"/opt/My Editor/nvim" -u NONE'`. Arguments apply when starting a new editor; reusing nvim keeps that instance's configuration. `preview` shows the file in the pane instead: Markdown rendered, code highlighted, `j`/`k` or the arrow keys, `f`/`b`, Page Up/Down or Ctrl+F/B for a page, and the wheel to scroll, `←`/`h` or `← files` back to the tree, `↗` always the default app, `e` the editor from Edit with at the top line shown, which the button names (`edit :42`). Otherwise a command that double-click and Enter run instead: `{path}` is the file and `{dir}` its folder, and without `{path}` the path goes last. It runs without a shell, so quote a word that holds spaces, and it should start the viewer and return rather than wait for it. Examples: `zed {path}`, `code -g {path}`, or in herdr a tab running [herdr-file-viewer](https://github.com/smarzban/herdr-file-viewer) on the file: `herdr plugin pane open --plugin herdr-file-viewer --entrypoint file-viewer --placement tab --focus --env HERDR_FILE_VIEWER_OPEN={path}`.
-- **Binary files:** `Open with` (default) hands every file, images included, to the editor or command in Open with. `default app` opens an image, audio, video, PDF, office document, archive, font or compiled file in its default app instead, so `code -g {path}` gets your code and Preview gets your PNGs. The type comes from the extension; the preview and the `↗` button are unaffected.
-- **Edit with:** what `e` does in the preview: it opens the file at the top line shown. Empty (default) uses `$VISUAL`, then `$EDITOR`, then `vi` in tmux or herdr on Linux/macOS, the same way as `Open with: editor`, passing the line as `+N`; elsewhere the `e` button is hidden. Otherwise a command like Open with, where `{line}` is that line: `code -g {path}:{line}` or `zed {path}:{line}`.
-- **Diff with:** what `d` does on a changed file, in the tree or the preview. Empty (default) shows its diff against HEAD in the pane, drawn by Claude Code's own diff view; an untracked file shows as all added, and `d` again goes back to the file. On a folder it shows every changed file under it, each under its name; `j`/`k` jump to the next or previous file (or hunk, for one file), the arrows scroll by line and `f`/`b` by page. Otherwise a terminal command run on the file in a tmux window, a herdr pane or, on Linux, a new terminal window through `xdg-terminal-exec`, with the file path last: `hunk diff --`, `lazygit -f`, `git difftool -y --` or `nvim -c Gvdiffsplit`.
-- **Terminal target:** where `Open with: editor`, `e` in the preview and a Diff with command start inside tmux or herdr. `auto` (default) keeps the behaviour above: a new tmux window, or a herdr pane split to the right. `pane right` and `pane below` split the current pane (`tmux split-window -h`/`-v`, `herdr pane split --direction right`/`down`); `tab` opens a tmux window or a herdr tab (`herdr tab create`); `workspace` opens a new tmux session and switches to it, returning to Claude's session when the program exits, or a new herdr workspace (`herdr workspace create`). A herdr tab opens in Claude's workspace. In tmux a running nvim in the session is still reused wherever it sits.
-- **Ignore:** file and folder names to leave out of the tree, its search and its shimmer, separated by spaces or commas, such as `.cache .tmp`. Names match exactly, without wildcards, at any depth, like the built-in `.git` and `node_modules`, and a matching path is never listed, found or flashed.
-- **Preview pane:** `bottom` (default) puts the split preview under the tree, above the status line, with a rule between them; `top` puts it under the header, the rule below it. It starts hidden: the header button or `p` with the tree focused shows it. The treemap uses the same space, so this setting places it too.
-- **Treemap:** what the split preview shows on a folder. `auto` (default) draws the picture treemap in Ghostty and kitty outside tmux and herdr, and the cell treemap everywhere else; if the terminal turns the picture down the pane switches to cells for the session. `image` tries the picture in any terminal and falls back to cells where Claude Code cannot show it, as inside tmux. `cells` always draws cells. `off` shows no treemap and runs no `du` for it.
-- **Palette:** your own colors, `key=#hex` pairs separated by spaces, laid over the terminal's colors. A key you leave out keeps the theme's color, so `accent=#83a598` alone recolors only folders. Keys: `fg`, `bg`, `accent` (folders), `muted` (dates and sizes), `urgent` (deleted files and conflicts), `selection` (the selected row), `hover` (the hovered row), `added`, `modified` and `renamed` (git status), `add` and `del` (line counts). An entry it cannot read is skipped and named in a notice at session start. Gruvbox Dark Hard, from [#13](https://github.com/data-goblin/claude-code-filetree/pull/13) by @Mourey: `fg=#ebdbb2 bg=#1d2021 accent=#83a598 muted=#928374 urgent=#fb4934 selection=#3c3836 added=#b8bb26 modified=#fabd2f renamed=#83a598 add=#b8bb26 del=#fb4934`
-- **Glyphs:** `auto` (default) uses Nerd Font icons when a Nerd Font is installed and your terminal started after it was installed, plain Unicode in the desktop app, and Nerd Font over SSH. `nerd` or `plain` forces one. `text` is `plain` with the header buttons spelled out as words: `up` (parent folder), `cwd` (follow the cwd), `sync` (reload), `dots` (hidden files, dim while hidden), `size` (sizes, dim while dates show), `fold` (collapse all), `split` (preview pane, dim while closed) and `clear` (clear selection); in a pane too narrow for the words the header falls back to the plain glyphs.
+```yaml
+Claude activity:  reads and writes | writes | reads | none
+Follow Claude:    on | off
+Open at start:    on | off
+Right column:     date | age | size | loc
+Hints:            on | off
+Search spacing:   on | off
+Shortcut row:     auto | always | off
+Open with:        empty | editor | preview | a command with {path} and {dir}
+Binary files:     Open with | default app
+Edit with:        empty | a command with {path} and {line}
+Diff with:        empty | a command such as "hunk diff --" or "lazygit -f"
+Terminal target:  auto | pane right | pane below | tab | workspace
+Ignore:           names to hide, such as ".cache .tmp"
+Preview pane:     bottom | top
+Treemap:          auto | image | cells | off
+Palette:          key=#hex pairs over the terminal colors
+Glyphs:           auto | nerd | plain | text
+```
 
-## herdr
+<img src="docs/media/text-glyphs.gif" alt="Glyphs set to text spells the header buttons out as words" width="800">
 
-Clicking rows needs herdr 0.9.1 or later. herdr 0.9.0 and older accept pixel mouse reporting but still send cell positions, which would put every click in the session in the wrong place, so on those versions the rows ignore the mouse and the rest of the pane and session keep working. Run `herdr update` to get row clicks.
+## Requirements
 
-With `Open with: editor`, or `e` in the preview, the editor opens in a new pane to the right of Claude's pane (or below it, or in a new tab or workspace, with Terminal target) and that pane closes when you quit the editor; see Settings.
+```yaml
+required:  Claude Code 2.1.287 or newer, git
+optional:
+  inotifywait:            live updates on Linux (inotify-tools)
+  magick or ffmpeg:       images other than PNG, video frames
+  pdftoppm or gs:         PDF pages
+  soffice:                Word and office pages
+  pandoc, pdftotext:      document text in tmux, herdr and other terminals
+  tmux or herdr:          an editor or diff tool in a new pane
+pictures:  Ghostty or kitty, outside tmux and herdr, on Linux and macOS
+```
+
+## Considerations
+
+- The Desktop app has no split preview or treemap
+- GIFs and videos show one still frame
+- Windows sizes folders through file listings, and the treemap draws one level
+- Row clicks need herdr 0.9.1 or later; run `herdr update`
 
 ## Contributing
 
