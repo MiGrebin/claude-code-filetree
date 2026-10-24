@@ -1465,19 +1465,38 @@ function markStale($: EngineInterface, paths: string[]): void {
 
 async function pickTile($: EngineInterface, id: string): Promise<void> {
   if (id.startsWith(REST)) return
+  const now = await $.clock.now()
+  const isDouble = lastPress.key === `tile:${id}` && now - lastPress.at < DOUBLE_MS
+  lastPress = { key: isDouble ? '' : `tile:${id}`, at: now }
   const t = await get($)
-  const shows = inside(t.root, id) && !isIgnored(t.root, id) && (t.showHidden || !id.slice(id.lastIndexOf('/') + 1).startsWith('.'))
-  if (shows) {
-    mapLock = null
-    await patch($, cur => ({ expanded: [...new Set([...cur.expanded, ...ancestorsOf(id, cur.root)])], cursor: id, scroll: null }))
-    await revealPaths($, [id])
-    if ((await get($)).nodes.find(n => n.id === id)?.kind === 'dir') return
-    $.clock.after(100, () => void focusPane($, t.root, treeKey()))
+  const kind = t.nodes.find(n => n.id === id)?.kind ?? (await $.fs.stat(id).then(s => s.kind, () => 'file'))
+  if (isDouble && kind === 'dir') {
+    drillTile($, id, t.cursor)
     return
   }
-  const kind = await $.fs.stat(id).then(s => s.kind, () => 'file')
-  mapLock = kind === 'dir' ? { anchor: id, pick: '', cursor: t.cursor } : { anchor: mapAnchor, pick: id, cursor: t.cursor }
+  const shows = inside(t.root, id) && !isIgnored(t.root, id) && (t.showHidden || !id.slice(id.lastIndexOf('/') + 1).startsWith('.'))
+  mapLock = { anchor: mapAnchor, pick: id, cursor: shows ? id : t.cursor }
+  if (!shows) {
+    void $.ui.invalidate('ui.render')
+    return
+  }
+  await patch($, cur => ({ expanded: [...new Set([...cur.expanded, ...ancestorsOf(id, cur.root)])], cursor: id, selected: id, scroll: null }))
+  await revealPaths($, [id])
+}
+
+function drillTile($: EngineInterface, id: string, cursor: string): void {
+  mapLock = { anchor: id, pick: '', cursor }
   void $.ui.invalidate('ui.render')
+}
+
+async function mapKey($: EngineInterface, key: string): Promise<boolean> {
+  const t = await get($)
+  if (!mapLock || mapLock.cursor !== t.cursor || !mapLock.pick || (key !== 'return' && key !== 'l' && key !== 'right')) return false
+  const pick = mapLock.pick
+  const kind = t.nodes.find(n => n.id === pick)?.kind ?? (await $.fs.stat(pick).then(s => s.kind, () => 'file'))
+  if (kind !== 'dir') return false
+  drillTile($, pick, t.cursor)
+  return true
 }
 
 function treeKey(): string {
@@ -1682,7 +1701,10 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   }
   const page = Math.max(1, peekRows - 1)
   const peek: Record<string, number> = { f: page, b: -page, pageup: -page, pagedown: page }
-  if (key === 'p' && surface !== 'desktop') await toggleSplit($)
+  if (key === 'p' && surface !== 'desktop' && t.split && mapLock?.cursor === t.cursor && mapLock.pick === t.cursor && peekTarget(t)) {
+    mapLock = null
+    void $.ui.invalidate('ui.render')
+  } else if (key === 'p' && surface !== 'desktop') await toggleSplit($)
   else if (t.split && splitShown && surface !== 'desktop' && (key === '[' || key === ']') && turnPage($, key === ']' ? 1 : -1)) return
   else if (t.split && splitShown && surface !== 'desktop' && key in peek) scrollSplit($, peekTop + (peek[key] ?? 0))
   else if (key === 'up' || key === 'k') await move(-1)
@@ -1962,6 +1984,7 @@ export const register: Register = (on, options) => {
       else if (data.key in by) await scrollPreview($, by[data.key] ?? 0)
       return {}
     }
+    if (e.element === 'treemap' && (await mapKey($, data.key))) return {}
     await navigate($, data.key, Boolean(data.shift), e.surface)
     return {}
   })
@@ -2312,9 +2335,9 @@ export const register: Register = (on, options) => {
         return null
       }
       peekRows = splitRows - 2
-      const target = peekTarget(t)
-      const lock = !target && mapLock?.cursor === t.cursor ? mapLock : null
+      const lock = mapLock?.cursor === t.cursor ? mapLock : null
       if (mapLock && !lock) mapLock = null
+      const target = lock ? '' : peekTarget(t)
       const anchor = target ? '' : (lock?.anchor ?? (t.nodes.find(n => n.id === t.cursor)?.kind === 'dir' ? t.cursor : t.root))
       mapPick = lock?.pick ?? ''
       stopScans(anchor)

@@ -2222,7 +2222,7 @@ function mapOf(tree: any): any {
   }
 }
 
-test('treemap: a folder under the cursor maps its children by du size, a click on a folder box moves the cursor there and maps that folder, an edit inside lights its block, and a file under the cursor always shows its preview', { timeoutMs: 20_000 }, async ($, on) => {
+test('treemap: a folder under the cursor maps its children by du size, a click on a box selects it and moves the cursor there without changing the map, Enter on the map drills into the picked folder, an edit inside lights its block, and p shows the picked file', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const root = '/home/k/proj'
   const clock = world(on, {
@@ -2249,9 +2249,17 @@ test('treemap: a folder under the cursor maps its children by du size, a click o
   expect(text(map)).not.toMatch(/[╭│─]/)
   expect(text(map)).toContain('x.ts 5.0M 56%')
   expect(JSON.stringify(await ui.drawn())).toContain('9.0M')
+  const fillOf = (m: any, tab: string) => m.rows.flatMap((r: any) => r.left).find((s: any) => s.tab === tab && s.t.trim())?.bg
+  const before = fillOf(map, `${root}/src`)
   await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
   await clock.settle()
   expect(JSON.stringify(await ui.drawn())).toContain(`"active":"${root}/src"`)
+  expect(ran).not.toContainEqual(['du', '-akxH', '-d', '2', '--', `${root}/src`])
+  expect(text(mapOf(await ui.drawn()))).toContain('x.ts 5.0M 56%')
+  expect(fillOf(mapOf(await ui.drawn()), `${root}/src`)).not.toBe(before)
+  await clock.advance(1_000)
+  await ui.post({ key: 'return' }, { in: 'treemap' })
+  await clock.settle()
   expect(ran).toContainEqual(['du', '-akxH', '-d', '2', '--', `${root}/src`])
   expect(text(mapOf(await ui.drawn()))).toContain('x.ts 5.0M 83%')
   await $.tool.call({ tool: 'Edit', file_path: `${root}/src/x.ts`, old_string: 'a', new_string: 'b' } as any)
@@ -2264,9 +2272,12 @@ test('treemap: a folder under the cursor maps its children by du size, a click o
     await clock.settle()
     const drawn = JSON.stringify(await ui.drawn())
     expect(drawn).toContain(`"active":"${root}/src/x.ts"`)
-    expect(drawn).not.toContain('"key":"treemap"')
-    expect(drawn).toContain('export const x')
+    expect(drawn).toContain('"key":"treemap"')
+    expect(drawn).not.toContain('export const x')
   }
+  await ui.post({ key: 'p' }, { in: 'treemap' })
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).toContain('export const x')
   await ui.post({ key: 'k' }, { in: 'rows' })
   await clock.settle()
   expect(mapOf(await ui.drawn())).toBeDefined()
@@ -2281,7 +2292,7 @@ function find(tree: any, type: string, key: string): any {
   }
 }
 
-test('treemap image: in Ghostty the map is one PNG Image with a click zone over it, a click on a folder box maps that folder, and a click on a file box shows the file', { timeoutMs: 20_000 }, async ($, on) => {
+test('treemap image: in Ghostty the map is one PNG Image with a click zone over it, a double click on a folder box maps that folder, and a click on a file box selects it and keeps the map', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const root = '/home/k/proj'
   const clock = world(on, {
@@ -2306,13 +2317,17 @@ test('treemap image: in Ghostty the map is one PNG Image with a click zone over 
   expect(zone.boxes.map((b: any) => b[0])).toContain(`${root}/src`)
   await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
   await clock.settle()
+  expect(find(await ui.drawn(), 'Client', 'treemap').props.boxes.map((b: any) => b[0])).not.toContain(`${root}/src/y.ts`)
+  await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
+  await clock.settle()
   const after = await ui.drawn()
   expect(find(after, 'Client', 'treemap').props.boxes.map((b: any) => b[0])).toContain(`${root}/src/y.ts`)
   expect(find(after, 'Image', 'treemap-image').source.png).not.toBe(image.source.png)
   await ui.post({ tab: `${root}/src/y.ts` }, { in: 'treemap' })
   await clock.settle()
   const file = await ui.drawn()
-  expect(find(file, 'Image', 'treemap-image')).toBeUndefined()
+  expect(find(file, 'Image', 'treemap-image')).toBeDefined()
+  expect(find(file, 'Client', 'treemap').props.boxes.map((b: any) => b[0])).toContain(`${root}/src/y.ts`)
   expect(JSON.stringify(file)).toContain(`"active":"${root}/src/y.ts"`)
 })
 
