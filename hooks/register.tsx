@@ -2529,7 +2529,7 @@ export const register: Register = (on, options) => {
 
     const paging = splitShown && Boolean(peekPath) && (pictureKind(peekPath) === 'pdf' || (pictureKind(peekPath) === 'office' && Boolean(Image) && !imageDenied && !inTmux && !inHerdr))
     const park = () => focusPane($, t.root, paging ? 'rows' : treeKey())
-    const footerName = footer ? (footer !== t.root && inside(t.root, footer) ? footer.slice(t.root.endsWith('/') ? t.root.length : t.root.length + 1) : shortPath(footer)) : ''
+    const footerName = footer === t.root ? t.root.split('/').filter(Boolean).pop() || t.root : footer ? (inside(t.root, footer) ? footer.slice(t.root.endsWith('/') ? t.root.length : t.root.length + 1) : shortPath(footer)) : ''
     const allKeys: { key: string; label: string; press: () => void }[] = [
       { key: 'jkhl', label: 'move', press: () => undefined },
       { key: 'o', label: 'open', press: () => void navigate($, 'return') },
