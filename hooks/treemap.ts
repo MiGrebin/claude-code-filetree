@@ -11,6 +11,8 @@ const MAX_TILES = 60
 const NEST_COLUMNS = 12
 const NEST_ROWS = 6
 
+export const gapOf = (ch: number) => Math.max(1, Math.round(ch / 16))
+
 export function parseDu(text: string, dir: string): { total?: number; items: Usage[] } {
   const top = new Map<string, Usage>()
   const kids = new Map<string, Usage[]>()
@@ -82,8 +84,8 @@ function squarify(areas: number[], x: number, y: number, w: number, h: number): 
   return out
 }
 
-type Unit = { cw: number; ch: number; aspect: number; head: number }
-const CELLS: Unit = { cw: 1, ch: 1, aspect: CELL_ASPECT, head: 3 }
+type Unit = { cw: number; ch: number; aspect: number; head: number; pad: number }
+const CELLS: Unit = { cw: 1, ch: 1, aspect: CELL_ASPECT, head: 3, pad: 1 }
 
 function place(usage: Usage[], x0: number, y0: number, x1: number, y1: number, u: Unit, parent?: Tile): Tile[] {
   const w = x1 - x0
@@ -106,7 +108,7 @@ function place(usage: Usage[], x0: number, y0: number, x1: number, y1: number, u
     if (!r) return []
     const tile: Tile = { path: s.path, name: s.name, bytes: s.bytes, x0: x0 + Math.round(r.x), x1: x0 + Math.round(r.x + r.w), y0: y0 + Math.round(r.y / u.aspect), y1: y0 + Math.round((r.y + r.h) / u.aspect), depth: parent ? parent.depth + 1 : 0, nested: false, ...(parent ? { parent } : {}) }
     if (tile.x1 <= tile.x0 || tile.y1 <= tile.y0) return []
-    const inner = !parent && s.kids?.length && tile.x1 - tile.x0 >= NEST_COLUMNS * u.cw && tile.y1 - tile.y0 >= NEST_ROWS * u.ch ? place(s.kids, tile.x0, tile.y0 + Math.round(u.head * u.ch), tile.x1, tile.y1, u, tile) : []
+    const inner = !parent && s.kids?.length && tile.x1 - tile.x0 >= NEST_COLUMNS * u.cw && tile.y1 - tile.y0 >= NEST_ROWS * u.ch ? place(s.kids, tile.x0 + u.pad, tile.y0 + Math.round(u.head * u.ch), tile.x1 - u.pad, tile.y1 - u.pad, u, tile) : []
     tile.nested = inner.length > 0
     return [tile, ...inner]
   })
@@ -117,7 +119,7 @@ export function layout(usage: Usage[], columns: number, rows: number): Tile[] {
 }
 
 export function layoutPixels(usage: Usage[], width: number, height: number, cw: number, ch: number): Tile[] {
-  return place(usage, 0, 0, width, height, { cw, ch, aspect: 1, head: 2 })
+  return place(usage, 0, 0, width, height, { cw, ch, aspect: 1, head: 2, pad: 3 * gapOf(ch) })
 }
 
 export function draw(tiles: Tile[], columns: number, rows: number, look: (t: Tile) => TileLook, label: (t: Tile) => string): RowSpec[] {
@@ -151,7 +153,7 @@ export function draw(tiles: Tile[], columns: number, rows: number, look: (t: Til
     const sized = [...size].length
     if (lines < 1 || name > room) continue
     const nameSt = { c: lk.name, b: lk.bold, ...fill, tab }
-    const sizeSt = { c: lk.size, ...fill, tab }
+    const sizeSt = { c: lk.size, b: lk.bold && lk.rank > 0, ...fill, tab }
     const parts: [number, number, string, Omit<Seg, 't'>][] =
       name + 1 + sized <= room ? [[t.y0 + 2, 0, t.name, nameSt], [t.y0 + 2, name + 1, size, sizeSt]]
       : !t.nested && lines >= 2 && sized <= room ? [[t.y0 + 2, 0, t.name, nameSt], [t.y0 + 3, 0, size, sizeSt]]

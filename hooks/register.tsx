@@ -8,7 +8,7 @@ import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly
 import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
 import { draw, layout, layoutPixels, mix, parseDu, REST, type Tile, type Usage } from './treemap'
-import { fitPixels, paint, type PixelLook, png, readable, type Rgb } from './pixmap'
+import { fitPixels, over, paint, type PixelLook, png, readable, type Rgb } from './pixmap'
 import { cellPixels, colorOf, ghosttyColors, type TermColors } from './term'
 import type { ZoneProps } from './zone'
 import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
@@ -1855,7 +1855,7 @@ export const register: Register = (on, options) => {
     const body = e.props.scroll?.bodyRows ?? 40
     const chrome = 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
     const spare = body - chrome - 5
-    const splitRows = t.split && !nativeScroll && spare >= 6 ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
+    const splitRows = t.split && !nativeScroll && spare >= 6 && (treemapSetting !== 'off' || Boolean(peekTarget(t))) ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
     splitShown = splitRows > 0
     if (!splitShown) overPeek = false
     const fixed = splitRows + 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
@@ -2047,13 +2047,12 @@ export const register: Register = (on, options) => {
       let start = peekTop
       const rule = <Text key="peek-rule" color={theme.muted}>{'─'.repeat(Math.max(1, e.props.bodyColumns))}</Text>
       const shown = target || anchor
-      const name = shown ? (shown !== t.root && inside(t.root, shown) ? relative(t.root, shown) : shortPath(shown)) : ''
+      const name = shown ? (shown === t.root ? shown.split('/').pop() || shown : inside(t.root, shown) ? relative(t.root, shown) : shortPath(shown)) : ''
       const pic = target ? await picture($, target) : null
       if (!target || pic) overPeek = false
       let content: RenderElement
       let status = ''
-      if (!target && anchor && treemapSetting === 'off') content = <Text> </Text>
-      else if (!target && anchor) {
+      if (!target && anchor) {
         mapAnchor = anchor
         const scan = usageOf($, anchor)
         const cols = Math.max(8, e.props.bodyColumns - 1)
@@ -2064,16 +2063,32 @@ export const register: Register = (on, options) => {
         const ground = theme.bg
         const shade = ground.startsWith('#') && theme.accent.startsWith('#')
         const pct = (bytes: number) => `${total ? Math.max(bytes ? 1 : 0, Math.round((bytes / total) * 100)) : 0}%`
-        const look = (tile: Tile) => {
+        const accent = colorOf(theme.accent, termColors, light)
+        const ink = colorOf(theme.fg, termColors, light)
+        const paper = termColors.bg ?? (theme.bg ? colorOf(theme.bg, termColors, light) : light ? [255, 255, 255] as Rgb : [24, 24, 24] as Rgb)
+        const muted = colorOf(theme.muted, termColors, light)
+        const hex = (c: Rgb) => `#${c.map(v => Math.round(v).toString(16).padStart(2, '0')).join('')}`
+        const heat = (tile: Tile, picked: boolean) => {
           const hot = lit.find(f => inside(tile.path, f))
-          const tone = hot ? (tones[t.flashTones[hot] ?? 'orange']?.solid ?? theme.accent) : ''
+          const warm = !hot && tile.parent ? lit.find(f => inside(tile.parent?.path ?? '', f)) : undefined
+          const from = hot ?? warm
+          const tone = from ? colorOf(tones[t.flashTones[from] ?? 'orange']?.solid ?? theme.accent, termColors, light) : undefined
+          const lift: [Rgb, number] | undefined = picked ? [accent, 0.8] : hot && tone ? [tone, 0.8] : tone ? [paper, 0.35] : undefined
+          return { tone, lift }
+        }
+        const look = (tile: Tile) => {
           const picked = tile === pick
+          const { tone, lift } = heat(tile, picked)
           const dim = tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
           const share = total ? tile.bytes / total : 0
           const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
-          const bg = shade ? mix(ground, picked ? theme.accent : tone || theme.accent, picked ? 0.5 : tone ? 0.4 : 0.04 + 0.08 * level) : picked ? theme.accent : tone || (tile.depth ? 'ansi256(8)' : 'ansi256(0)')
-          const ink = !shade && (picked || tone) ? 'ansi256(0)' : theme.fg
-          return { name: dim && !tone && !picked && !tile.depth ? theme.muted : ink, size: ink, bold: picked || Boolean(tone) || tile.depth === 0, bg, rank: picked ? 2 : tone ? 1 : 0 }
+          if (lift) {
+            const fill = over(lift[0] === paper && tone ? over(paper, tone, 0.8) : paper, lift[0], lift[1])
+            const c = hex(readable(fill, 1, ink, paper))
+            return { name: c, size: c, bold: true, bg: hex(fill), rank: picked ? 2 : 1 }
+          }
+          const bg = shade ? mix(ground, theme.accent, 0.04 + 0.08 * level) : tile.depth ? 'ansi256(8)' : 'ansi256(0)'
+          return { name: dim && !tile.depth ? theme.muted : theme.fg, size: theme.fg, bold: tile.depth === 0, bg, rank: 0 }
         }
         status = pick ? `${pick.name} ${formatSize(pick.bytes)} ${pct(pick.bytes)}` : `${formatSize(total)}${scan.done ? '' : ' …'}`
         const sized = (x: Tile) => `${formatSize(x.bytes)} ${pct(x.bytes)}`
@@ -2085,20 +2100,17 @@ export const register: Register = (on, options) => {
           const cw = (cell.cw * k) / fit.scale
           const ch = (cell.ch * k) / fit.scale
           const boxes = layoutPixels(scan.items, fit.width, fit.height, cw, ch)
-          const accent = colorOf(theme.accent, termColors, light)
-          const ink = colorOf(theme.fg, termColors, light)
-          const paper = termColors.bg ?? (theme.bg ? colorOf(theme.bg, termColors, light) : light ? [255, 255, 255] as Rgb : [24, 24, 24] as Rgb)
-          const muted = colorOf(theme.muted, termColors, light)
+          const under = new Map<Tile, Rgb>()
           const pixelLook = (tile: Tile): PixelLook => {
-            const hot = lit.find(f => inside(tile.path, f))
             const picked = tile.path === lock?.pick
+            const { lift } = heat(tile, picked)
             const dim = tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
             const share = total ? tile.bytes / total : 0
             const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
-            const tone = hot ? colorOf(tones[t.flashTones[hot] ?? 'orange']?.solid ?? theme.accent, termColors, light) : undefined
-            const fill = picked ? accent : tone ?? (dim ? muted : accent)
-            const alpha = picked ? 0.75 : tone ? 0.6 : dim ? 0.12 : 0.06 + 0.05 * level
-            return { fill, alpha, ink: dim && !tone && !picked && !tile.depth ? muted : picked || tone ? readable(fill, alpha, ink, paper) : ink, bold: picked || Boolean(tone) || tile.depth === 0, rank: picked ? 2 : tone ? 1 : 0, dim }
+            const [fill, alpha] = lift ?? [dim ? muted : accent, dim ? 0.12 : 0.06 + 0.05 * level]
+            const seen = over((tile.parent && under.get(tile.parent)) || paper, fill, alpha)
+            under.set(tile, seen)
+            return { fill, alpha, ink: lift ? readable(seen, 1, ink, paper) : dim && !tile.depth ? muted : ink, bold: Boolean(lift) || tile.depth === 0, rank: lift ? (picked ? 2 : 1) : 0, dim }
           }
           const looks = boxes.map(pixelLook)
           const key = JSON.stringify([fit, ink, boxes.map((b, i) => [b.path, b.x0, b.y0, b.x1, b.y1, sized(b), looks[i]])])

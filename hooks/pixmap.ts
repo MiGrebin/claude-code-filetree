@@ -1,5 +1,5 @@
 import { FONT_BITS, FONT_CHARS, FONT_H, FONT_W } from './font'
-import type { Tile } from './treemap'
+import { gapOf, type Tile } from './treemap'
 
 export type Rgb = [number, number, number]
 export type PixelLook = { fill: Rgb; alpha: number; ink: Rgb; bold: boolean; rank: number; dim: boolean }
@@ -20,8 +20,12 @@ function luminance([r, g, b]: Rgb): number {
   return 0.2126 * c(r) + 0.7152 * c(g) + 0.0722 * c(b)
 }
 
+export function over(under: Rgb, fill: Rgb, alpha: number): Rgb {
+  return fill.map((v, i) => v * alpha + (under[i] ?? 0) * (1 - alpha)) as Rgb
+}
+
 export function readable(fill: Rgb, alpha: number, ink: Rgb, ground: Rgb): Rgb {
-  const under = luminance(fill.map((v, i) => v * alpha + (ground[i] ?? 0) * (1 - alpha)) as Rgb)
+  const under = luminance(over(ground, fill, alpha))
   const ratio = (c: Rgb) => (Math.max(luminance(c), under) + 0.05) / (Math.min(luminance(c), under) + 0.05)
   return ratio(ink) >= ratio(ground) ? ink : ground
 }
@@ -45,9 +49,25 @@ export function paint(tiles: Tile[], width: number, height: number, ch: number, 
     const by = Math.min(height, Math.floor(y1))
     if (ax >= bx || ay >= by) return
     const word = ((Math.round(a * 255) & 255) << 24) | (b << 16) | (g << 8) | r
-    for (let y = ay; y < by; y++) px.fill(word >>> 0, y * width + ax, y * width + bx)
+    for (let y = ay; y < by; y++) {
+      if (a >= 1) {
+        px.fill(word >>> 0, y * width + ax, y * width + bx)
+        continue
+      }
+      for (let i = y * width + ax; i < y * width + bx; i++) {
+        const d = px[i] ?? 0
+        const da = (d >>> 24) / 255
+        if (!da) {
+          px[i] = word >>> 0
+          continue
+        }
+        const oa = a + da * (1 - a)
+        const mixc = (c: number, s: number) => Math.round((c * a + ((d >>> s) & 255) * da * (1 - a)) / oa)
+        px[i] = ((Math.round(oa * 255) << 24) | (mixc(b, 16) << 16) | (mixc(g, 8) << 8) | mixc(r, 0)) >>> 0
+      }
+    }
   }
-  const gap = Math.max(1, Math.round(ch / 16))
+  const gap = gapOf(ch)
   const scale = Math.max(1, Math.floor((ch * 0.8) / FONT_H))
   const gw = FONT_W * scale
   const gh = FONT_H * scale
@@ -84,8 +104,8 @@ export function paint(tiles: Tile[], width: number, height: number, ch: number, 
     const x = t.x0 + padX
     const y = t.y0 + padY
     text(t.name, x, y, lk.ink, lk.bold)
-    if (name + 1 + sized <= room) text(size, x + (name + 1) * gw, y, lk.ink, false)
-    else if (!t.nested && lines >= 2 && sized <= room) text(size, x, y + ch, lk.ink, false)
+    if (name + 1 + sized <= room) text(size, x + (name + 1) * gw, y, lk.ink, lk.bold && lk.rank > 0)
+    else if (!t.nested && lines >= 2 && sized <= room) text(size, x, y + ch, lk.ink, lk.bold && lk.rank > 0)
   }
   return new Uint8Array(px.buffer)
 }
