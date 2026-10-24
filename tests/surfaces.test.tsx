@@ -22,6 +22,7 @@ type World = {
   theme?: { toml: string; mtimeMs: number }
   du?: Record<string, string>
   duDelays?: number[]
+  watch?: { after: number; change: () => string }
   links?: string[]
   files?: Record<string, string>
   mtimes?: Record<string, number>
@@ -128,6 +129,10 @@ function world(on: any, w: World, ran: Ran) {
     ran.push(argv)
     const out = argv[0] === 'du' ? (w.du?.[argv.at(-1) ?? ''] ?? '') : ''
     if (out) yield { stream: 'stdout', text: out }
+    if (argv[0] === 'inotifywait' && w.watch) {
+      await clock.sleep(w.watch.after)
+      yield { stream: 'stdout', text: w.watch.change() }
+    }
     return { value: { code: 0, signal: null } }
   } as any)
   on('tool.call', (_$: any, e: any) => (w.tool?.(e) ?? { result: { stdout: '', stderr: '' } }) as any)
@@ -2237,4 +2242,38 @@ test('terminal target pane below in herdr: Diff with splits the pane downward', 
 
 test('tmux workspace: the new session returns to Claude when the program exits and is removed when no client can switch to it', () => {
   expect(TMUX_WORKSPACE).toBe(`d=$1; shift; s=$(tmux new-session -d -P -F '#{session_id}' -c "$d" -- "$@") && tmux set-option -t "$s" detach-on-destroy off >/dev/null && { tmux switch-client -t "$s" || { tmux kill-session -t "$s"; exit 1; }; }; exit`)
+})
+
+test('files added and removed outside Claude show in the tree and the treemap without a click', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const w = {
+    os: 'linux' as const, env: { HOME: '/home/k' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.ts', 'file']] } as Record<string, [string, string][]>,
+    du: { [root]: `4\t${root}/a.ts\n4\t${root}\n` } as Record<string, string>,
+    watch: { after: 5_000, change: () => {
+      w.dirs[root] = [['shell.bin', 'file']]
+      w.du[root] = `8192\t${root}/shell.bin\n8192\t${root}\n`
+      return `${root}/shell.bin\n${root}/a.ts\n`
+    } },
+  }
+  const clock = world(on, w as any, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  expect(ran).toContainEqual(['inotifywait', '-mq', '-e', 'create,delete,moved_to,moved_from,close_write', '--format', '%w%f', '--', root])
+  expect(await texts(ui)).not.toContain('shell.bin')
+  await clock.advance(5_000)
+  await clock.settle()
+  await clock.advance(2_000)
+  await clock.settle()
+  const after = await texts(ui)
+  expect(after).toContain('shell.bin')
+  expect(after).not.toContain('a.ts')
+  expect(JSON.stringify(mapOf(await ui.drawn()))).toContain(`"tab":"${root}/shell.bin"`)
+  expect(ran.filter(a => a[0] === 'inotifywait').length).toBe(1)
+  await ui.unmount()
 })

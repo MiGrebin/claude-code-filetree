@@ -124,6 +124,11 @@ let hovered = ''
 let view = { from: 0, max: 0 }
 let nativeScroll = false
 let lastSync = 0
+let watcher: { key: string; stop: () => void } | null = null
+let watchMissing = false
+let watchTimer: Timer | null = null
+const watchQueue = new Set<string>()
+const WATCH_MS = 150
 let noDock = false
 let home = ''
 let platform: Promise<'linux' | 'darwin' | 'win32'> | null = null
@@ -267,8 +272,55 @@ async function loadDirs($: EngineInterface, dirs: string[]): Promise<Map<string,
     listLatest.delete(dir)
     if (kids) listed.set(dir, kids)
   }
-  await patch($, t => (t.root === root ? { nodes: replaceChildren(t.nodes, listed) } : {}))
+  await patch($, t => {
+    if (t.root !== root) return {}
+    const nodes = replaceChildren(t.nodes, listed)
+    const up = dirname(t.cursor)
+    const lost = t.cursor && listed.has(up) && !nodes.some(n => n.id === t.cursor)
+    return lost ? { nodes, cursor: up === root ? '' : up } : { nodes }
+  })
+  void watchTree($)
   return listed
+}
+
+async function watchTree($: EngineInterface): Promise<void> {
+  const t = await get($)
+  const dirs = t.root ? [t.root, ...openDirs(t)] : []
+  const key = dirs.join('\0')
+  if (watchMissing || watcher?.key === key) return
+  watcher?.stop()
+  watcher = null
+  if (!dirs.length || (await osName($)) !== 'linux') return
+  const stream = $.process.spawn({ argv: ['inotifywait', '-mq', '-e', 'create,delete,moved_to,moved_from,close_write', '--format', '%w%f', '--', ...dirs] })
+  const own = { key, stop: () => void stream.return(undefined as never).catch(() => undefined) }
+  watcher = own
+  let rest = ''
+  try {
+    for await (const chunk of stream) {
+      if (watcher !== own) return
+      if (chunk.stream !== 'stdout') continue
+      const lines = (rest + chunk.text).split('\n')
+      rest = lines.pop() ?? ''
+      for (const line of lines) if (line) watchQueue.add(posix(line))
+      if (watchQueue.size && !watchTimer) watchTimer = $.clock.after(WATCH_MS, () => void watched($))
+    }
+  } catch {
+    if (watcher === own) watchMissing = true
+  }
+}
+
+async function watched($: EngineInterface): Promise<void> {
+  watchTimer = null
+  const paths = [...watchQueue]
+  watchQueue.clear()
+  const t = await get($)
+  const open = new Set([t.root, ...openDirs(t)])
+  const dirs = [...new Set(paths.map(p => dirname(p)).filter(d => open.has(d)))]
+  if (!dirs.length) return
+  markStale($, paths)
+  await staleSizes($, paths)
+  await loadDirs($, dirs)
+  if (t.top) await refreshGit($)
 }
 
 async function git($: EngineInterface, cwd: string, args: string[], timeoutMs = 20_000, stdin?: string) {
@@ -1418,6 +1470,7 @@ async function toggle($: EngineInterface, n: FileNode): Promise<void> {
     if (n.kind === 'dir') open.has(n.id) ? open.delete(n.id) : open.add(n.id)
     return { expanded: [...open], cursor: n.id, selected: n.kind === 'dir' ? t.selected : n.id }
   })
+  void watchTree($)
 }
 
 async function press($: EngineInterface, n: FileNode): Promise<void> {
@@ -1557,7 +1610,7 @@ export const register: Register = (on, options) => {
       ageTick = showAge ? $.clock.every(AGE_TICK_MS, () => $.ui.invalidate('ui.render')) : null
       gitPoll?.cancel()
       gitStamp = null
-      gitPoll = $.clock.every(GIT_POLL_MS, () => void followCwd($).then(moved => moved || gitChanged($)))
+      gitPoll = $.clock.every(GIT_POLL_MS, () => void followCwd($).then(moved => moved || gitChanged($)).then(() => watchTree($)))
       await shown
     })()
     return next(e)
@@ -1726,6 +1779,8 @@ export const register: Register = (on, options) => {
 
   on('session.end', async ($, e, next) => {
     cached = null
+    watcher?.stop()
+    watcher = null
     snapshot?.cancel()
     snapshot = null
     const result = await next(e)
