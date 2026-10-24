@@ -2046,12 +2046,13 @@ function mapOf(tree: any): any {
   }
 }
 
-test('treemap: a folder under the cursor maps its children by du size, a click selects the block in the tree and names its size, a second click on a folder maps that folder, and an edit inside lights its block', { timeoutMs: 20_000 }, async ($, on) => {
+test('treemap: a folder under the cursor maps its children by du size, a click on a folder box moves the cursor there and maps that folder, an edit inside lights its block, and a file under the cursor always shows its preview', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const root = '/home/k/proj'
   const clock = world(on, {
     os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', status: '', numstat: '',
     dirs: { [root]: [['src', 'dir'], ['big.bin', 'file'], ['a.ts', 'file']], [`${root}/src`]: [['x.ts', 'file'], ['y.ts', 'file']] },
+    files: { [`${root}/src/x.ts`]: 'export const x = 1\n' },
     du: {
       [root]: `5120\t${root}/src/x.ts\n1024\t${root}/src/y.ts\n6144\t${root}/src\n3072\t${root}/big.bin\n4\t${root}/a.ts\n9220\t${root}\n`,
       [`${root}/src`]: `5120\t${root}/src/x.ts\n1024\t${root}/src/y.ts\n6144\t${root}/src\n`,
@@ -2074,23 +2075,25 @@ test('treemap: a folder under the cursor maps its children by du size, a click s
   expect(JSON.stringify(await ui.drawn())).toContain('9.0M')
   await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
   await clock.settle()
-  const drawn = JSON.stringify(await ui.drawn())
-  expect(drawn).toContain('src 6.0M 67%')
-  expect(mapOf(await ui.drawn())).toBeDefined()
-  expect(drawn).toContain(`"active":"${root}/src"`)
-  map = mapOf(await ui.drawn())
-  expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src` && s.bg?.startsWith('#') && s.b))).toBe(true)
-  await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
-  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).toContain(`"active":"${root}/src"`)
   expect(ran).toContainEqual(['du', '-akxH', '-d', '2', '--', `${root}/src`])
-  expect(text(mapOf(await ui.drawn()))).toContain('x.ts')
+  expect(text(mapOf(await ui.drawn()))).toContain('x.ts 5.0M 83%')
   await $.tool.call({ tool: 'Edit', file_path: `${root}/src/x.ts`, old_string: 'a', new_string: 'b' } as any)
   await clock.settle()
   map = mapOf(await ui.drawn())
   expect(map.rows.some((r: any) => r.left.some((s: any) => s.tab === `${root}/src/x.ts` && s.bg?.startsWith('#') && s.b))).toBe(true)
-  await ui.post({ key: 'j' }, { in: 'treemap' })
+  await ui.post({ tab: `${root}/src/x.ts` }, { in: 'treemap' })
   await clock.settle()
-  expect(JSON.stringify(await ui.drawn())).not.toContain('"key":"treemap"')
+  for (let i = 0; i < 3; i++) {
+    await clock.settle()
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain(`"active":"${root}/src/x.ts"`)
+    expect(drawn).not.toContain('"key":"treemap"')
+    expect(drawn).toContain('export const x')
+  }
+  await ui.post({ key: 'k' }, { in: 'rows' })
+  await clock.settle()
+  expect(mapOf(await ui.drawn())).toBeDefined()
 })
 
 function find(tree: any, type: string, key: string): any {
@@ -2102,13 +2105,16 @@ function find(tree: any, type: string, key: string): any {
   }
 }
 
-test('treemap image: in Ghostty the map is one PNG Image with a click zone over it, and a click selects the box and repaints', { timeoutMs: 20_000 }, async ($, on) => {
+test('treemap image: in Ghostty the map is one PNG Image with a click zone over it, a click on a folder box maps that folder, and a click on a file box shows the file', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const root = '/home/k/proj'
   const clock = world(on, {
     os: 'linux', env: { HOME: '/home/k', TERM_PROGRAM: 'ghostty' }, cwd: root, top: '', status: '', numstat: '',
-    dirs: { [root]: [['src', 'dir'], ['big.bin', 'file']], [`${root}/src`]: [['x.ts', 'file']] },
-    du: { [root]: `5120\t${root}/src/x.ts\n5120\t${root}/src\n3072\t${root}/big.bin\n8196\t${root}\n` },
+    dirs: { [root]: [['src', 'dir'], ['big.bin', 'file']], [`${root}/src`]: [['x.ts', 'file'], ['y.ts', 'file']] },
+    du: {
+      [root]: `5120\t${root}/src/x.ts\n5120\t${root}/src\n3072\t${root}/big.bin\n8196\t${root}\n`,
+      [`${root}/src`]: `4096\t${root}/src/x.ts\n1024\t${root}/src/y.ts\n5120\t${root}/src\n`,
+    },
   }, ran)
   await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
   await clock.settle()
@@ -2122,11 +2128,16 @@ test('treemap image: in Ghostty the map is one PNG Image with a click zone over 
   expect([...bytes.slice(1, 4)].map(c => String.fromCharCode(c)).join('')).toBe('PNG')
   const zone = find(await ui.drawn(), 'Client', 'treemap').props
   expect(zone.boxes.map((b: any) => b[0])).toContain(`${root}/src`)
-  await ui.post({ tab: `${root}/big.bin` }, { in: 'treemap' })
+  await ui.post({ tab: `${root}/src` }, { in: 'treemap' })
   await clock.settle()
   const after = await ui.drawn()
-  expect(JSON.stringify(after)).toContain('big.bin 3.0M')
+  expect(find(after, 'Client', 'treemap').props.boxes.map((b: any) => b[0])).toContain(`${root}/src/y.ts`)
   expect(find(after, 'Image', 'treemap-image').source.png).not.toBe(image.source.png)
+  await ui.post({ tab: `${root}/src/y.ts` }, { in: 'treemap' })
+  await clock.settle()
+  const file = await ui.drawn()
+  expect(find(file, 'Image', 'treemap-image')).toBeUndefined()
+  expect(JSON.stringify(file)).toContain(`"active":"${root}/src/y.ts"`)
 })
 
 test('treemap off: a folder under the cursor shows no map and runs no du', { timeoutMs: 20_000, options: { treemap: 'off' } }, async ($, on) => {

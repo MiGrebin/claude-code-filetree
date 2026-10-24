@@ -156,17 +156,6 @@
         "top"
       ]
     },
-    "select": {
-      "type": "string",
-      "title": "On a file",
-      "description": "What the split preview shows while a file is selected. preview: the file itself. treemap: the map of the file's folder with its box highlighted; p or a click on that box opens the file. off: nothing. Folders show the treemap either way.",
-      "default": "preview",
-      "options": [
-        "preview",
-        "treemap",
-        "off"
-      ]
-    },
     "treemap": {
       "type": "string",
       "title": "Treemap",

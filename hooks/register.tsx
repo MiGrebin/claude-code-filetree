@@ -163,8 +163,6 @@ const scans = new Map<string, Scan>()
 let mapLock: { anchor: string; pick: string; cursor: string } | null = null
 let mapAnchor = ''
 let mapPick = ''
-let filePeek = ''
-let fileSetting: 'preview' | 'treemap' | 'off' = 'preview'
 const SCAN_KEEP = 24
 const SCAN_DRAW_MS = 100
 const STALE_MS = 1500
@@ -1306,37 +1304,19 @@ function markStale($: EngineInterface, paths: string[]): void {
 async function pickTile($: EngineInterface, id: string): Promise<void> {
   if (id.startsWith(REST)) return
   const t = await get($)
-  const node = t.nodes.find(n => n.id === id)
-  if (mapPick === id) {
-    if (node?.kind === 'file' && fileSetting === 'treemap' && t.cursor === id) {
-      filePeek = id
-      mapLock = null
-    } else if (node?.kind === 'dir' || !node) {
-      const kind = node?.kind ?? (await $.fs.stat(id).then(s => s.kind, () => 'file'))
-      if (kind === 'dir') mapLock = { anchor: id, pick: '', cursor: t.cursor }
-    }
-    void $.ui.invalidate('ui.render')
+  const shows = inside(t.root, id) && !isIgnored(t.root, id) && (t.showHidden || !id.slice(id.lastIndexOf('/') + 1).startsWith('.'))
+  if (shows) {
+    mapLock = null
+    await patch($, cur => ({ expanded: [...new Set([...cur.expanded, ...ancestorsOf(id, cur.root)])], cursor: id, scroll: null }))
+    await revealPaths($, [id])
     return
   }
-  const shows = inside(t.root, id) && !isIgnored(t.root, id) && (t.showHidden || !id.slice(id.lastIndexOf('/') + 1).startsWith('.'))
-  mapLock = { anchor: mapAnchor, pick: id, cursor: shows ? id : t.cursor }
-  if (!shows) return void $.ui.invalidate('ui.render')
-  await patch($, cur => ({ expanded: [...new Set([...cur.expanded, ...ancestorsOf(id, cur.root)])], cursor: id, scroll: null }))
-  await revealPaths($, [id])
-}
-
-async function splitKey($: EngineInterface): Promise<void> {
-  const t = await get($)
-  if (t.split && splitShown && fileSetting === 'treemap' && mapPick && mapPick === t.cursor && t.nodes.find(n => n.id === mapPick)?.kind === 'file') {
-    filePeek = mapPick
-    mapLock = null
-    return void $.ui.invalidate('ui.render')
-  }
-  await toggleSplit($)
+  const kind = await $.fs.stat(id).then(s => s.kind, () => 'file')
+  mapLock = kind === 'dir' ? { anchor: id, pick: '', cursor: t.cursor } : { anchor: mapAnchor, pick: id, cursor: t.cursor }
+  void $.ui.invalidate('ui.render')
 }
 
 async function toggleSplit($: EngineInterface): Promise<void> {
-  filePeek = ''
   overPeek = false
   peekTop = 0
   await patch($, cur => ({ split: !cur.split }))
@@ -1503,7 +1483,7 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   }
   const page = Math.max(1, peekRows - 1)
   const peek: Record<string, number> = { f: page, b: -page, pageup: -page, pagedown: page }
-  if (key === 'p' && surface !== 'desktop') await splitKey($)
+  if (key === 'p' && surface !== 'desktop') await toggleSplit($)
   else if (t.split && splitShown && surface !== 'desktop' && key in peek) scrollSplit($, peekTop + (peek[key] ?? 0))
   else if (key === 'up' || key === 'k') await move(-1)
   else if (key === 'down' || key === 'j') await move(1)
@@ -1561,7 +1541,6 @@ export const register: Register = (on, options) => {
   ignoreNames = typeof options?.ignore === 'string' ? options.ignore.split(/[\s,]+/).filter(Boolean) : []
   searchGap = options?.spacing !== 'off'
   showShortcuts = options?.shortcuts !== 'off'
-  fileSetting = options?.select === 'treemap' || options?.select === 'off' ? options.select : 'preview'
   treemapSetting = options?.treemap === 'image' || options?.treemap === 'cells' || options?.treemap === 'off' ? options.treemap : 'auto'
   openWithSetting = typeof options?.open === 'string' ? options.open : ''
   binariesInDefaultApp = options?.binaries === 'default app'
@@ -1733,7 +1712,7 @@ export const register: Register = (on, options) => {
       } else if (typeof data.key === 'string') {
         const page = Math.max(1, peekRows - 1)
         const by: Record<string, number> = { up: -1, k: -1, down: 1, j: 1, f: page, b: -page, pageup: -page, pagedown: page, space: page, ' ': page, home: -Infinity, end: Infinity }
-        if (data.key === 'p') await splitKey($)
+        if (data.key === 'p') await toggleSplit($)
         else if (data.key in by) scrollSplit($, peekTop + (by[data.key] ?? 0))
       }
       return {}
@@ -1929,7 +1908,7 @@ export const register: Register = (on, options) => {
     const body = e.props.scroll?.bodyRows ?? 40
     const chrome = 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
     const spare = body - chrome - 5
-    const splitRows = t.split && !nativeScroll && spare >= 6 && (treemapSetting !== 'off' || (Boolean(peekTarget(t)) && fileSetting !== 'off')) ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
+    const splitRows = t.split && !nativeScroll && spare >= 6 && (treemapSetting !== 'off' || Boolean(peekTarget(t))) ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
     splitShown = splitRows > 0
     if (!splitShown) overPeek = false
     const fixed = splitRows + 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
@@ -2107,15 +2086,11 @@ export const register: Register = (on, options) => {
         return null
       }
       peekRows = splitRows - 2
-      const lock = mapLock && mapLock.cursor === t.cursor && !(filePeek && mapLock.pick === filePeek) ? mapLock : null
-      mapLock = lock
-      const file = lock ? '' : peekTarget(t)
-      if (filePeek !== file) filePeek = ''
-      const mapFile = file && fileSetting === 'treemap' && treemapSetting !== 'off' && !filePeek ? file : ''
-      const blank = Boolean(file) && fileSetting === 'off'
-      const target = mapFile || blank ? '' : file
-      const anchor = target || blank ? '' : (lock?.anchor ?? (mapFile ? dirname(mapFile) : t.nodes.find(n => n.id === t.cursor)?.kind === 'dir' ? t.cursor : t.root))
-      mapPick = lock?.pick ?? mapFile
+      const target = peekTarget(t)
+      const lock = !target && mapLock?.cursor === t.cursor ? mapLock : null
+      if (mapLock && !lock) mapLock = null
+      const anchor = target ? '' : (lock?.anchor ?? (t.nodes.find(n => n.id === t.cursor)?.kind === 'dir' ? t.cursor : t.root))
+      mapPick = lock?.pick ?? ''
       stopScans(anchor)
       if (target !== peekPath) {
         peekPath = target
@@ -2219,8 +2194,7 @@ export const register: Register = (on, options) => {
         } else content = tiles.length
           ? <Client key="treemap" module="./rows.tsx" props={{ rows: draw(tiles, cols, peekRows, look, sized), active: '', ...rowColors, pointer } satisfies RowsProps} />
           : <Text color={theme.muted}>{scan.done ? 'empty' : 'sizing…'}</Text>
-      } else if (blank) content = <Text> </Text>
-      else if (!target) content = <Text color={theme.muted}>no file selected</Text>
+      } else if (!target) content = <Text color={theme.muted}>no file selected</Text>
       else if (pic) {
         if (pic.state === 'ready' && Image) {
           const fit = fitCells(pic, Math.max(1, e.props.bodyColumns - 1), peekRows)
