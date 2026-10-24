@@ -11,7 +11,7 @@ const MAX_TILES = 60
 const NEST_COLUMNS = 12
 const NEST_ROWS = 6
 
-export const gapOf = (ch: number) => Math.max(1, Math.round(ch / 16))
+export const gapOf = (ch: number) => Math.max(2, Math.round(ch / 9))
 
 export function parseDu(text: string, dir: string): { total?: number; items: Usage[] } {
   const top = new Map<string, Usage>()
@@ -155,7 +155,7 @@ export function draw(tiles: Tile[], columns: number, rows: number, look: (t: Til
     const sized = [...size].length
     if (lines < 1 || name > room) continue
     const nameSt = { c: lk.name, b: lk.bold, ...fill, tab }
-    const sizeSt = { c: lk.size, b: lk.bold && lk.rank > 0, ...fill, tab }
+    const sizeSt = { c: lk.size, b: lk.bold, ...fill, tab }
     const parts: [number, number, string, Omit<Seg, 't'>][] =
       name + 1 + sized <= room ? [[t.y0 + 2, 0, t.name, nameSt], [t.y0 + 2, name + 1, size, sizeSt]]
       : !t.nested && lines >= 2 && sized <= room ? [[t.y0 + 2, 0, t.name, nameSt], [t.y0 + 3, 0, size, sizeSt]]

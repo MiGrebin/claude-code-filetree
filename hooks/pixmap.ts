@@ -24,6 +24,34 @@ export function over(under: Rgb, fill: Rgb, alpha: number): Rgb {
   return fill.map((v, i) => v * alpha + (under[i] ?? 0) * (1 - alpha)) as Rgb
 }
 
+export function ratio(a: Rgb, b: Rgb): number {
+  const [x, y] = [luminance(a), luminance(b)]
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+
+export function inkOn(fill: Rgb, inks: Rgb[]): Rgb {
+  return inks.reduce((best, c) => (ratio(c, fill) > ratio(best, fill) ? c : best))
+}
+
+function tinted(paper: Rgb, tint: Rgb, inks: Rgb[], alpha: number): { fill: Rgb; ink: Rgb; score: number; alpha: number } {
+  const fill = over(paper, tint, alpha)
+  const ink = inkOn(fill, inks)
+  return { fill, ink, score: ratio(ink, fill), alpha }
+}
+
+function strongest(paper: Rgb, tint: Rgb, inks: Rgb[], target: number): ReturnType<typeof tinted> {
+  const all = Array.from({ length: 51 }, (_, i) => tinted(paper, tint, inks, i / 50))
+  const ok = all.filter(x => x.score >= 4.5)
+  const near = (x: { alpha: number }) => Math.abs(x.alpha - target)
+  return ok.length ? ok.reduce((a, b) => (near(b) < near(a) ? b : a)) : all.reduce((a, b) => (b.score > a.score ? b : a))
+}
+
+export function boxLook(paper: Rgb, tint: Rgb, inks: Rgb[], depth: number, share: number): { fill: Rgb; ink: Rgb } {
+  const top = strongest(paper, tint, inks, 0.74 + 0.2 * Math.sqrt(share))
+  if (!(depth % 2)) return top
+  return tinted(paper, tint, inks, strongest(paper, tint, inks, 0.84).alpha >= 0.45 ? 0.16 : 0)
+}
+
 export function readable(fill: Rgb, alpha: number, ink: Rgb, ground: Rgb): Rgb {
   const under = luminance(over(ground, fill, alpha))
   const ratio = (c: Rgb) => (Math.max(luminance(c), under) + 0.05) / (Math.min(luminance(c), under) + 0.05)
@@ -104,8 +132,8 @@ export function paint(tiles: Tile[], width: number, height: number, ch: number, 
     const x = t.x0 + padX
     const y = t.y0 + padY
     text(t.name, x, y, lk.ink, lk.bold)
-    if (name + 1 + sized <= room) text(size, x + (name + 1) * gw, y, lk.ink, lk.bold && lk.rank > 0)
-    else if (!t.nested && lines >= 2 && sized <= room) text(size, x, y + ch, lk.ink, lk.bold && lk.rank > 0)
+    if (name + 1 + sized <= room) text(size, x + (name + 1) * gw, y, lk.ink, lk.bold)
+    else if (!t.nested && lines >= 2 && sized <= room) text(size, x, y + ch, lk.ink, lk.bold)
   }
   return new Uint8Array(px.buffer)
 }

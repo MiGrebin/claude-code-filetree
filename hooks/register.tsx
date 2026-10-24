@@ -7,8 +7,8 @@ import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
 import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
-import { draw, layout, layoutPixels, mix, parseDu, REST, type Tile, type Usage } from './treemap'
-import { fitPixels, over, paint, type PixelLook, png, readable, type Rgb } from './pixmap'
+import { draw, layout, layoutPixels, parseDu, REST, type Tile, type Usage } from './treemap'
+import { boxLook, fitPixels, inkOn, over, paint, type PixelLook, png, readable, type Rgb } from './pixmap'
 import { cellPixels, colorOf, ghosttyColors, type TermColors } from './term'
 import type { ZoneProps } from './zone'
 import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
@@ -2122,27 +2122,37 @@ export const register: Register = (on, options) => {
         const paper = termColors.bg ?? (theme.bg ? colorOf(theme.bg, termColors, light) : light ? [255, 255, 255] as Rgb : [24, 24, 24] as Rgb)
         const muted = colorOf(theme.muted, termColors, light)
         const hex = (c: Rgb) => `#${c.map(v => Math.round(v).toString(16).padStart(2, '0')).join('')}`
+        const inks = [ink, paper, colorOf('ansi256(15)', termColors, light), colorOf('ansi256(0)', termColors, light)]
+        const known = shade || Boolean(termColors.bg)
+        const dimmed = (tile: Tile) => tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
+        const boxOf = (tile: Tile) => {
+          if (!dimmed(tile)) return boxLook(paper, accent, inks, tile.depth, total ? tile.bytes / total : 0)
+          const fill = over(paper, muted, 0.3)
+          return { fill, ink: inkOn(fill, inks) }
+        }
         const heat = (tile: Tile, picked: boolean) => {
           const hot = lit.find(f => inside(tile.path, f))
           const warm = !hot && tile.parent ? lit.find(f => inside(tile.parent?.path ?? '', f)) : undefined
           const from = hot ?? warm
           const tone = from ? colorOf(tones[t.flashTones[from] ?? 'orange']?.solid ?? theme.accent, termColors, light) : undefined
-          const lift: [Rgb, number] | undefined = picked ? [accent, 0.8] : hot && tone ? [tone, 0.8] : tone ? [paper, 0.35] : undefined
+          const lift: [Rgb, number] | undefined = picked ? [ink, 0.85] : hot && tone ? [tone, 0.8] : tone ? [paper, 0.35] : undefined
           return { tone, lift }
         }
         const look = (tile: Tile) => {
           const picked = tile === pick
           const { tone, lift } = heat(tile, picked)
-          const dim = tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
-          const share = total ? tile.bytes / total : 0
-          const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
           if (lift) {
             const fill = over(lift[0] === paper && tone ? over(paper, tone, 0.8) : paper, lift[0], lift[1])
             const c = hex(readable(fill, 1, ink, paper))
             return { name: c, size: c, bold: true, bg: hex(fill), rank: picked ? 2 : 1 }
           }
-          const bg = shade ? mix(ground, theme.accent, 0.04 + 0.08 * level) : tile.depth ? 'ansi256(8)' : 'ansi256(0)'
-          return { name: dim && !tile.depth ? theme.muted : theme.fg, size: theme.fg, bold: tile.depth === 0, bg, rank: 0 }
+          if (known) {
+            const box = boxOf(tile)
+            const c = hex(box.ink)
+            return { name: c, size: c, bold: true, bg: hex(box.fill), rank: 0 }
+          }
+          const top = !dimmed(tile) && !(tile.depth % 2)
+          return { name: top ? 'ansi256(0)' : 'ansi256(15)', size: top ? 'ansi256(0)' : 'ansi256(15)', bold: true, bg: top ? 'ansi256(4)' : 'ansi256(8)', rank: 0 }
         }
         status = pick ? `${pick.name} ${formatSize(pick.bytes)} ${pct(pick.bytes)}` : `${formatSize(total)}${scan.done ? '' : ' …'}`
         const sized = (x: Tile) => `${formatSize(x.bytes)} ${pct(x.bytes)}`
@@ -2158,13 +2168,11 @@ export const register: Register = (on, options) => {
           const pixelLook = (tile: Tile): PixelLook => {
             const picked = tile.path === mapPick
             const { lift } = heat(tile, picked)
-            const dim = tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
-            const share = total ? tile.bytes / total : 0
-            const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
-            const [fill, alpha] = lift ?? [dim ? muted : accent, dim ? 0.12 : 0.06 + 0.05 * level]
-            const seen = over((tile.parent && under.get(tile.parent)) || paper, fill, alpha)
+            const dim = dimmed(tile)
+            const box = lift ? null : boxOf(tile)
+            const seen = box ? box.fill : over((tile.parent && under.get(tile.parent)) || paper, lift?.[0] ?? accent, lift?.[1] ?? 1)
             under.set(tile, seen)
-            return { fill, alpha, ink: lift ? readable(seen, 1, ink, paper) : dim && !tile.depth ? muted : ink, bold: Boolean(lift) || tile.depth === 0, rank: lift ? (picked ? 2 : 1) : 0, dim }
+            return { fill: seen, alpha: 1, ink: box ? box.ink : readable(seen, 1, ink, paper), bold: true, rank: lift ? (picked ? 2 : 1) : 0, dim }
           }
           const looks = boxes.map(pixelLook)
           const key = JSON.stringify([fit, ink, boxes.map((b, i) => [b.path, b.x0, b.y0, b.x1, b.y1, sized(b), looks[i]])])
