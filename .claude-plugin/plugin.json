@@ -92,7 +92,7 @@
     "shortcuts": {
       "type": "string",
       "title": "Shortcut row",
-      "description": "on: the j/k/h/l/open/search row under the search bar. off: the row is hidden and the tree gets it; the keys still work with the tree focused.",
+      "description": "on: the j/k/h/l/open/search row at the bottom of the pane. off: the row is hidden and the tree gets it; the keys still work with the tree focused.",
       "default": "on",
       "options": [
         "on",

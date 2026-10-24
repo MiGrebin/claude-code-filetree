@@ -2123,6 +2123,7 @@ export const register: Register = (on, options) => {
         {!t.top && showHints && <Text color={theme.muted}>{unicode ? '± ' : '\u{e702} '}no git repo · git status starts after git init</Text>}
         {searchGap ? <Text key="gap-above"> </Text> : null}
         <Box flexDirection="row">
+          {glyphSetting === 'text' ? null : <Text color={theme.muted}>{unicode ? '⌕ ' : '\u{ea6d} '}</Text>}
           <Box flexGrow={1}>
             <Input
               key="q"
@@ -2136,15 +2137,6 @@ export const register: Register = (on, options) => {
           {t.query ? <Button key="clear" plain dimColor label={unicode ? '×' : '\u{ea76}'} onPress={() => void search($, '')} /> : null}
         </Box>
         {searchGap ? <Text key="gap-below"> </Text> : null}
-        {showShortcuts ? (
-        <Box flexDirection="row" gap={2}>
-          {([['j', '↓', '\u{ea9a}'], ['k', '↑', '\u{eaa1}'], ['h', '←', '\u{ea9b}'], ['l', '→', '\u{ea9c}']] as const).map(([k, plain, nerd]) => (
-            <Button key={`nav-${k}`} plain dimColor hotkey={k} label={unicode ? plain : nerd} onPress={() => void navigate($, k).then(park)} />
-          ))}
-          <Button key="nav-o" plain dimColor autoFocus hotkey="o" label={unicode ? 'open' : '\u{ea94} open'} onPress={() => void navigate($, 'return')} />
-          <Button key="nav-s" plain dimColor hotkey="s" label={unicode ? 'search' : '\u{ea6d} search'} onPress={() => void $.ui.focus({ requestId: PANE, key: 'q' })} />
-        </Box>
-        ) : null}
         <Client
           key="rows"
           module="./rows.tsx"
@@ -2165,6 +2157,15 @@ export const register: Register = (on, options) => {
             {latest && chip(latest)}
           </Box>
         )}
+        {showShortcuts ? (
+        <Box flexDirection="row" gap={2}>
+          {([['j', '↓', '\u{ea9a}'], ['k', '↑', '\u{eaa1}'], ['h', '←', '\u{ea9b}'], ['l', '→', '\u{ea9c}']] as const).map(([k, plain, nerd]) => (
+            <Button key={`nav-${k}`} plain dimColor hotkey={k} label={unicode ? plain : nerd} onPress={() => void navigate($, k).then(park)} />
+          ))}
+          <Button key="nav-o" plain dimColor autoFocus hotkey="o" label={unicode ? 'open' : '\u{ea94} open'} onPress={() => void navigate($, 'return')} />
+          <Button key="nav-s" plain dimColor hotkey="s" label="search" onPress={() => void $.ui.focus({ requestId: PANE, key: 'q' })} />
+        </Box>
+        ) : null}
       </Box>
     )
   })
