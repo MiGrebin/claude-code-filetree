@@ -2062,7 +2062,7 @@ export const register: Register = (on, options) => {
         const pick = tiles.find(x => x.path === lock?.pick)
         const ground = theme.bg
         const shade = ground.startsWith('#') && theme.accent.startsWith('#')
-        const pct = (bytes: number) => `${total ? Math.max(bytes ? 1 : 0, Math.round((bytes / total) * 100)) : 0}%`
+        const pct = (bytes: number) => { const p = total ? Math.round((bytes / total) * 100) : 0; return bytes && !p ? '<1%' : `${p}%` }
         const accent = colorOf(theme.accent, termColors, light)
         const ink = colorOf(theme.fg, termColors, light)
         const paper = termColors.bg ?? (theme.bg ? colorOf(theme.bg, termColors, light) : light ? [255, 255, 255] as Rgb : [24, 24, 24] as Rgb)

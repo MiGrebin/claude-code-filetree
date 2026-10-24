@@ -322,13 +322,12 @@ export function age(ms: number, now: number): string {
 
 export function formatSize(bytes: number): string {
   if (bytes < 0) return '?'
-  if (bytes < 1024) return `${bytes} B`
-  const units = ['K', 'M', 'G', 'T']
-  let v = bytes / 1024
+  const units = ['B', 'K', 'M', 'G', 'T']
+  let v = bytes
   let i = 0
-  while (v >= 1024 && i < units.length - 1) {
+  while (Math.round(v) >= 1000 && i < units.length - 1) {
     v /= 1024
     i++
   }
-  return `${v < 100 ? v.toFixed(1) : Math.round(v)} ${units[i]}`
+  return `${i && v < 9.95 ? v.toFixed(1) : Math.round(v)}${units[i]}`
 }
