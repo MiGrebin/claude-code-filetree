@@ -1396,6 +1396,9 @@ async function pickTile($: EngineInterface, id: string): Promise<void> {
     mapLock = null
     await patch($, cur => ({ expanded: [...new Set([...cur.expanded, ...ancestorsOf(id, cur.root)])], cursor: id, scroll: null }))
     await revealPaths($, [id])
+    if ((await get($)).nodes.find(n => n.id === id)?.kind === 'dir') return
+    const title = `Files: ${t.root.split('/').pop() || t.root}`
+    $.clock.after(100, () => void $.ui.open({ id: PANE, title, focus: true }).then(() => $.ui.focus({ requestId: PANE, key: showShortcuts ? 'nav-o' : 'rows' })).catch(() => {}))
     return
   }
   const kind = await $.fs.stat(id).then(s => s.kind, () => 'file')
