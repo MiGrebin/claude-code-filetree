@@ -1,5 +1,5 @@
 import { FONT_BITS, FONT_CHARS, FONT_H, FONT_W } from './font'
-import { gapOf, type Tile } from './treemap'
+import { fillOf, pixelGap, pixelInset, type Tile } from './treemap'
 
 export type Rgb = [number, number, number]
 export type PixelLook = { fill: Rgb; alpha: number; ink: Rgb; bold: boolean; rank: number; dim: boolean }
@@ -68,6 +68,10 @@ export function fitPixels(columns: number, rows: number, cw: number, ch: number)
   return { width, height, scale }
 }
 
+export const glyphScale = (ch: number) => Math.max(1, Math.floor((ch * 0.8) / FONT_H))
+
+export const textHeight = (ch: number) => FONT_H * glyphScale(ch)
+
 export function paint(tiles: Tile[], width: number, height: number, ch: number, look: (t: Tile) => PixelLook, label: (t: Tile) => string): Uint8Array {
   const px = new Uint32Array(width * height)
   const put = (x0: number, y0: number, x1: number, y1: number, [r, g, b]: Rgb, a: number) => {
@@ -95,8 +99,9 @@ export function paint(tiles: Tile[], width: number, height: number, ch: number, 
       }
     }
   }
-  const gap = gapOf(ch)
-  const scale = Math.max(1, Math.floor((ch * 0.8) / FONT_H))
+  const gap = pixelGap(ch)
+  const inset = pixelInset(ch)
+  const scale = glyphScale(ch)
   const gw = FONT_W * scale
   const gh = FONT_H * scale
   const text = (s: string, x: number, y: number, ink: Rgb, bold: boolean) => {
@@ -117,20 +122,20 @@ export function paint(tiles: Tile[], width: number, height: number, ch: number, 
     }
   }
   const looks = new Map(tiles.map(t => [t, look(t)]))
-  const order = [...tiles].sort((a, b) => a.depth - b.depth || (looks.get(a)?.rank ?? 0) - (looks.get(b)?.rank ?? 0))
+  const order = [...tiles].sort((a, b) => a.depth - b.depth)
   for (const t of order) {
     const lk = looks.get(t) as PixelLook
-    put(t.x0 + gap, t.y0 + gap, t.x1 - gap, t.y1 - gap, lk.fill, lk.alpha)
-    const padX = Math.round(gw * 0.75)
-    const padY = Math.round((ch - gh) / 2 + ch * 0.35)
-    const room = Math.floor((t.x1 - t.x0 - 2 * padX) / gw)
-    const lines = Math.floor((t.y1 - t.y0 - padY - gap) / ch)
+    const f = fillOf(t, inset)
+    put(f.x0, f.y0, f.x1, f.y1, lk.fill, lk.alpha)
+    const room = Math.floor((f.x1 - f.x0 - 2 * gap) / gw)
+    const tall = f.y1 - f.y0 - 2 * gap
+    const lines = tall < gh ? 0 : 1 + Math.floor((tall - gh) / ch)
     const name = [...t.name].length
     const size = label(t)
     const sized = [...size].length
     if (lines < 1 || name > room) continue
-    const x = t.x0 + padX
-    const y = t.y0 + padY
+    const x = f.x0 + gap
+    const y = f.y0 + gap
     text(t.name, x, y, lk.ink, lk.bold)
     if (name + 1 + sized <= room) text(size, x + (name + 1) * gw, y, lk.ink, lk.bold)
     else if (!t.nested && lines >= 2 && sized <= room) text(size, x, y + ch, lk.ink, lk.bold)

@@ -86,8 +86,12 @@ function squarify(areas: number[], x: number, y: number, w: number, h: number): 
   return out
 }
 
-type Unit = { cw: number; ch: number; aspect: number; head: number; pad: number }
-const CELLS: Unit = { cw: 1, ch: 1, aspect: CELL_ASPECT, head: 3, pad: 1 }
+export type Gaps = { l: number; r: number; t: number; b: number }
+type Unit = { cw: number; ch: number; aspect: number; inset: Gaps; gx: number; gy: number; text: number }
+export const CELL_INSET: Gaps = { l: 1, r: 1, t: 1, b: 0 }
+const CELL_GAP = { x: 2, y: 1 }
+
+export const fillOf = (t: Tile, g: Gaps) => ({ x0: t.x0 + g.l, y0: t.y0 + g.t, x1: t.x1 - g.r, y1: t.y1 - g.b })
 
 function place(usage: Usage[], x0: number, y0: number, x1: number, y1: number, u: Unit, parent?: Tile): Tile[] {
   const w = x1 - x0
@@ -105,62 +109,68 @@ function place(usage: Usage[], x0: number, y0: number, x1: number, y1: number, u
   shown.sort((a, b) => weigh(b) - weigh(a))
   const scale = (w * h) / shown.reduce((a, u) => a + weigh(u), 0)
   const rects = squarify(shown.map(u => weigh(u) * scale), 0, 0, w, h)
+  const g = u.inset
   return shown.flatMap((s, i) => {
     const r = rects[i]
     if (!r) return []
     const tile: Tile = { path: s.path, name: s.name, bytes: s.bytes, x0: x0 + Math.round(r.x), x1: x0 + Math.round(r.x + r.w), y0: y0 + Math.round(r.y / u.aspect), y1: y0 + Math.round((r.y + r.h) / u.aspect), depth: parent ? parent.depth + 1 : 0, nested: false, ...(parent ? { parent } : {}) }
-    if (tile.x1 <= tile.x0 || tile.y1 <= tile.y0) return []
-    const inner = !parent && s.kids?.length && tile.x1 - tile.x0 >= NEST_COLUMNS * u.cw && tile.y1 - tile.y0 >= NEST_ROWS * u.ch ? place(s.kids, tile.x0 + u.pad, tile.y0 + Math.round(u.head * u.ch), tile.x1 - u.pad, tile.y1 - u.pad, u, tile) : []
+    const f = fillOf(tile, g)
+    if (f.x1 <= f.x0 || f.y1 <= f.y0) return []
+    const inner = !parent && s.kids?.length && tile.x1 - tile.x0 >= NEST_COLUMNS * u.cw && tile.y1 - tile.y0 >= NEST_ROWS * u.ch ? place(s.kids, f.x0 + u.gx - g.l, f.y0 + 2 * u.gy + u.text - g.t, f.x1 - (u.gx - g.r), f.y1 - (u.gy - g.b), u, tile) : []
     tile.nested = inner.length > 0
     return [tile, ...inner]
   })
 }
 
 export function layout(usage: Usage[], columns: number, rows: number): Tile[] {
-  return place(usage, 0, 0, columns - 1, rows - 1, CELLS)
+  const g = CELL_INSET
+  return place(usage, CELL_GAP.x - g.l, CELL_GAP.y - g.t, columns - (CELL_GAP.x - g.r), rows - (CELL_GAP.y - g.b), { cw: 1, ch: 1, aspect: CELL_ASPECT, inset: g, gx: CELL_GAP.x, gy: CELL_GAP.y, text: 1 })
 }
 
-export function layoutPixels(usage: Usage[], width: number, height: number, cw: number, ch: number): Tile[] {
-  return place(usage, 0, 0, width, height, { cw, ch, aspect: 1, head: 2, pad: 3 * gapOf(ch) })
+export const pixelGap = (ch: number) => 2 * gapOf(ch)
+
+export function pixelInset(ch: number): Gaps {
+  const half = gapOf(ch)
+  return { l: half, r: half, t: half, b: half }
+}
+
+export function layoutPixels(usage: Usage[], width: number, height: number, cw: number, ch: number, textH: number): Tile[] {
+  const gap = pixelGap(ch)
+  const g = pixelInset(ch)
+  return place(usage, gap - g.l, gap - g.t, width - (gap - g.r), height - (gap - g.b), { cw, ch, aspect: 1, inset: g, gx: gap, gy: gap, text: textH })
 }
 
 export function draw(tiles: Tile[], columns: number, rows: number, look: (t: Tile) => TileLook, label: (t: Tile) => string): RowSpec[] {
   const text = Array.from({ length: rows }, () => new Array<string>(columns).fill(' '))
   const style = Array.from({ length: rows }, () => new Array<Omit<Seg, 't'>>(columns).fill({}))
-  const owner = Array.from({ length: rows }, () => new Array<number>(columns).fill(-1))
   const looks = new Map(tiles.map(t => [t, look(t)]))
-  const order = [...tiles].sort((a, b) => a.depth - b.depth || (looks.get(a)?.rank ?? 0) - (looks.get(b)?.rank ?? 0))
+  const order = [...tiles].sort((a, b) => a.depth - b.depth)
+  const g = CELL_INSET
   for (const t of order) {
     const lk = looks.get(t) as TileLook
     const tab = t.path
-    const p = t.parent
-    const pbg = p ? looks.get(p)?.bg : undefined
-    const within = (x: number, y: number) => p !== undefined && x > p.x0 && x < p.x1 && y > p.y0 && y < p.y1
-    const cell = (x: number, y: number, st: Omit<Seg, 't'>, ch?: string, rank = Infinity) => {
+    const f = fillOf(t, g)
+    const cell = (x: number, y: number, st: Omit<Seg, 't'>, ch: string) => {
       if (y < 0 || y >= rows || x < 0 || x >= columns) return
-      if (ch !== undefined) (text[y] as string[])[x] = ch
-      if (rank < ((owner[y] as number[])[x] ?? -1)) return
-      if (rank !== Infinity) (owner[y] as number[])[x] = rank
+      ;(text[y] as string[])[x] = ch
       ;(style[y] as Omit<Seg, 't'>[])[x] = st
     }
-    const gap = (x: number, y: number) => (within(x, y) && pbg ? { bg: pbg, tab: p?.path } : {})
-    for (let x = t.x0; x <= t.x1; x++) for (const y of [t.y0, t.y1]) cell(x, y, gap(x, y), ' ', lk.rank)
-    for (let y = t.y0; y <= t.y1; y++) for (const x of [t.x0, t.x1]) cell(x, y, gap(x, y), ' ', lk.rank)
     const fill = lk.bg ? { bg: lk.bg } : {}
-    for (let y = t.y0 + 1; y < t.y1; y++) for (let x = t.x0 + 1; x < t.x1; x++) cell(x, y, { ...fill, tab }, ' ')
-    const room = t.x1 - t.x0 - 3
-    const lines = t.y1 - t.y0 - 2
+    for (let y = f.y0; y < f.y1; y++) for (let x = f.x0; x < f.x1; x++) cell(x, y, { ...fill, tab }, ' ')
+    const room = f.x1 - f.x0 - 2 * CELL_GAP.x
+    const lines = f.y1 - f.y0 - 2 * CELL_GAP.y
     const size = label(t)
     const name = [...t.name].length
     const sized = [...size].length
     if (lines < 1 || name > room) continue
     const nameSt = { c: lk.name, b: lk.bold, ...fill, tab }
     const sizeSt = { c: lk.size, b: lk.bold, ...fill, tab }
+    const top = f.y0 + CELL_GAP.y
     const parts: [number, number, string, Omit<Seg, 't'>][] =
-      name + 1 + sized <= room ? [[t.y0 + 2, 0, t.name, nameSt], [t.y0 + 2, name + 1, size, sizeSt]]
-      : !t.nested && lines >= 2 && sized <= room ? [[t.y0 + 2, 0, t.name, nameSt], [t.y0 + 3, 0, size, sizeSt]]
-      : [[t.y0 + 2, 0, t.name, nameSt]]
-    for (const [y, from, s, st] of parts) [...s].forEach((ch, i) => cell(t.x0 + 2 + from + i, y, st, ch))
+      name + 1 + sized <= room ? [[top, 0, t.name, nameSt], [top, name + 1, size, sizeSt]]
+      : !t.nested && lines >= 2 && sized <= room ? [[top, 0, t.name, nameSt], [top + 1, 0, size, sizeSt]]
+      : [[top, 0, t.name, nameSt]]
+    for (const [y, from, s, st] of parts) [...s].forEach((ch, i) => cell(f.x0 + CELL_GAP.x + from + i, y, st, ch))
   }
   return text.map((row, y) => {
     const segs: Seg[] = []

@@ -9,7 +9,7 @@ import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
 import { counted, formatLoc, locArgv, locUsage, parseLoc, sumDirs } from './loc'
 import { draw, layout, layoutPixels, parseDu, REST, type Tile, type Usage } from './treemap'
-import { boxLook, fitPixels, inkOn, over, paint, type PixelLook, png, readable, type Rgb } from './pixmap'
+import { boxLook, fitPixels, inkOn, over, paint, type PixelLook, png, readable, type Rgb, textHeight } from './pixmap'
 import { cellPixels, colorOf, ghosttyColors, type TermColors } from './term'
 import type { ZoneProps } from './zone'
 import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
@@ -2392,7 +2392,7 @@ export const register: Register = (on, options) => {
           const fit = fitPixels(cols, peekRows, cell.cw * k, cell.ch * k)
           const cw = (cell.cw * k) / fit.scale
           const ch = (cell.ch * k) / fit.scale
-          const boxes = layoutPixels(scan.items, fit.width, fit.height, cw, ch)
+          const boxes = layoutPixels(scan.items, fit.width, fit.height, cw, ch, textHeight(ch))
           const under = new Map<Tile, Rgb>()
           const pixelLook = (tile: Tile): PixelLook => {
             const picked = tile.path === mapPick
