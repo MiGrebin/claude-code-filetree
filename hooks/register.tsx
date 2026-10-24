@@ -166,6 +166,7 @@ let mapPick = ''
 let filePeek = ''
 let fileSetting: 'preview' | 'treemap' | 'off' = 'preview'
 const SCAN_KEEP = 24
+const SCAN_DRAW_MS = 100
 const STALE_MS = 1500
 const staleQueue = new Set<string>()
 let staleTimer: Timer | null = null
@@ -1254,16 +1255,16 @@ async function runScan($: EngineInterface, scan: Scan, seeded: boolean): Promise
       const stream = $.process.spawn({ argv: ['du', '-akxH', '-d', '2', '--', scan.dir] })
       scan.stop = () => void stream.return(undefined as never).catch(() => undefined)
       let text = ''
+      let drawn = 0
       for await (const chunk of stream) {
         if (scan.stopped) return
         if (chunk.stream !== 'stdout') continue
         text += chunk.text
-        const got = parseDu(text.slice(0, text.lastIndexOf('\n') + 1), scan.dir)
-        out = got.items
-        if (!seeded) {
-          scan.items = out
-          void $.ui.invalidate('ui.render')
-        }
+        if (seeded || Date.now() - drawn < SCAN_DRAW_MS) continue
+        drawn = Date.now()
+        out = parseDu(text.slice(0, text.lastIndexOf('\n') + 1), scan.dir).items
+        scan.items = out
+        void $.ui.invalidate('ui.render')
       }
       if (scan.stopped) return
       const got = parseDu(text, scan.dir)

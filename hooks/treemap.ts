@@ -34,7 +34,9 @@ export function parseDu(text: string, dir: string): { total?: number; items: Usa
     if (cut < 0) top.set(path, usage)
     else {
       const parent = base + rel.slice(0, cut)
-      kids.set(parent, [...(kids.get(parent) ?? []), usage])
+      const list = kids.get(parent)
+      if (list) list.push(usage)
+      else kids.set(parent, [usage])
     }
   }
   return { total, items: [...top.values()].map(u => ({ ...u, kids: kids.get(u.path) ?? [] })) }
@@ -165,8 +167,9 @@ export function draw(tiles: Tile[], columns: number, rows: number, look: (t: Til
     row.forEach((ch, x) => {
       const st = style[y]?.[x] ?? {}
       const last = segs[segs.length - 1]
-      if (last && last.c === st.c && last.bg === st.bg && Boolean(last.b) === Boolean(st.b) && last.tab === st.tab) last.t += ch
-      else segs.push({ t: ch, ...(st.c ? { c: st.c } : {}), ...(st.bg ? { bg: st.bg } : {}), ...(st.b ? { b: true } : {}), ...(st.tab ? { tab: st.tab } : {}) })
+      const seg: Seg = { t: ch, ...(st.c ? { c: st.c } : {}), ...(st.bg ? { bg: st.bg } : {}), ...(st.b ? { b: true } : {}), ...(st.tab ? { tab: st.tab } : {}) }
+      if (last && last.c === seg.c && last.bg === seg.bg && last.b === seg.b && last.tab === seg.tab) last.t += ch
+      else segs.push(seg)
     })
     return { id: '', left: segs, right: [] }
   })
