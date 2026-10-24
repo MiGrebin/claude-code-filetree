@@ -1674,9 +1674,11 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   const rows = visibleRows(t)
   const at = rows.findIndex(r => r.node.id === t.cursor)
   const cur = rows[at]?.node
+  const onRoot = Boolean(t.root) && t.cursor === t.root
   const move = (d: number) => {
-    const target = rows[Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + d))]
-    return target ? patch($, () => ({ cursor: target.node.id, selected: target.node.id, scroll: null })) : Promise.resolve()
+    const to = onRoot ? Math.max(0, Math.min(rows.length - 1, d - 1)) : at === 0 && d === -1 ? -1 : Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + d))
+    const id = to < 0 ? t.root : rows[to]?.node.id
+    return id ? patch($, () => ({ cursor: id, selected: id, scroll: null })) : Promise.resolve()
   }
   const page = Math.max(1, peekRows - 1)
   const peek: Record<string, number> = { f: page, b: -page, pageup: -page, pagedown: page }
@@ -1723,6 +1725,11 @@ async function pressHeader($: EngineInterface, id: string): Promise<void> {
   else if (id === 'unselect') await patch($, () => ({ selected: '', cursor: '' }))
   else if (id === 'external' && t.preview) await openFile($, t.preview, { mode: '' })
   else if (id === 'split') await toggleSplit($)
+}
+
+async function selectRoot($: EngineInterface): Promise<void> {
+  mapLock = null
+  await patch($, cur => ({ cursor: cur.root, selected: cur.root, scroll: null }))
 }
 
 function shortPath(path: string): string {
@@ -2164,6 +2171,7 @@ export const register: Register = (on, options) => {
     const wordButtons = plainButtons.map(b => ({ ...b, label: WORDS[b.id] ?? b.label }))
     const wordWidth = wordButtons.reduce((w, b) => w + b.label.length + 1, 1)
     const buttons = glyphSetting === 'text' && e.props.bodyColumns - wordWidth >= 8 ? wordButtons : plainButtons
+    const rootGlyph = unicode ? '■' : t.top === t.root ? '\u{f02a2}' : '\u{e5fe}'
     const header = t.top ? [t.top.split('/').pop() ?? t.top, t.prefix.replace(/\/$/, '')].filter(Boolean).join('/') : t.root.split('/').pop() || t.root
 
     const rowSpec = (r: (typeof rows)[number]): RowSpec => {
@@ -2524,11 +2532,14 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column" minHeight={Math.max(1, e.props.scroll?.bodyRows ?? 1)} backgroundColor={theme.bg || undefined}>
         <Box flexDirection="row">
-          <Text bold color={theme.accent} wrap="truncate-start">
-            {header}
-          </Text>
+          <Box flexDirection="row" flexShrink={1} overflow="hidden" backgroundColor={t.cursor === t.root ? rowColors.activeBg || undefined : undefined}>
+            <Button key="root" plain onPress={() => void selectRoot($).then(() => focusPane($, t.root, treeKey()))}>
+              <Text color={theme.accent}>{`${rootGlyph} `}</Text>
+              <Text bold color={theme.accent}>{header}</Text>
+            </Button>
+          </Box>
           <Box flexGrow={1} />
-          {hint(buttons, header.length)}
+          {hint(buttons, header.length + 2)}
           <Box flexDirection="row" gap={1}>
             {buttons.map(button)}
             <Text> </Text>

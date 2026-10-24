@@ -1755,6 +1755,43 @@ test('the footer names the entry under the cursor, and ? shows the shortcuts wit
   await ui.unmount()
 })
 
+test('the root row has a folder glyph, k from the first row selects it, the split maps the whole root, and the footer keeps ?: shortcuts left of the selected name', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['src', 'dir'], ['a.ts', 'file']], [`${root}/src`]: [['x.ts', 'file']] },
+    du: { [root]: `5120\t${root}/src/x.ts\n5120\t${root}/src\n2048\t${root}/a.ts\n7168\t${root}\n`, [`${root}/src`]: `5120\t${root}/src/x.ts\n5120\t${root}/src\n` },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  const footer = (d: any) => JSON.stringify(d)
+  expect(footer(await ui.drawn())).toContain('"key":"root","label":"■ proj"')
+  expect(footer(await ui.drawn())).toContain('"key":"nav-help","label":"?: shortcuts"')
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  await ui.post({ key: 'home' }, { in: 'rows' })
+  await clock.settle()
+  expect(ran).toContainEqual(['du', '-akxH', '-d', '2', '--', `${root}/src`])
+  await ui.post({ key: 'k' }, { in: 'rows' })
+  await clock.settle()
+  const drawn = footer(await ui.drawn())
+  expect(drawn).toContain(`"active":"${root}"`)
+  expect(drawn).toMatch(/"label":"\?: shortcuts".*"selected: ".*"~\/proj"/)
+  expect(mapOf(await ui.drawn()).rows.map((r: any) => r.left.map((x: any) => x.t).join('')).join('\n')).toContain('a.ts')
+  await ui.post({ key: 'j' }, { in: 'rows' })
+  await clock.settle()
+  expect(footer(await ui.drawn())).toContain(`"active":"${root}/src"`)
+  await ui.post({ key: 'k' }, { in: 'rows' })
+  await clock.settle()
+  await ui.press({ key: 'root' })
+  await clock.settle()
+  expect(footer(await ui.drawn())).toContain(`"active":"${root}"`)
+  await ui.unmount()
+})
+
 for (const os of ['linux', 'win32'] as const) {
   test(`${os}: a failed file opener is visible`, { timeoutMs: 20_000 }, async ($, on) => {
     const ran: Ran = []
