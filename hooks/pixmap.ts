@@ -15,6 +15,17 @@ export function rgbOf(color: string): Rgb | undefined {
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255]
 }
 
+function luminance([r, g, b]: Rgb): number {
+  const c = (v: number) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * c(r) + 0.7152 * c(g) + 0.0722 * c(b)
+}
+
+export function readable(fill: Rgb, alpha: number, ink: Rgb, ground: Rgb): Rgb {
+  const under = luminance(fill.map((v, i) => v * alpha + (ground[i] ?? 0) * (1 - alpha)) as Rgb)
+  const ratio = (c: Rgb) => (Math.max(luminance(c), under) + 0.05) / (Math.min(luminance(c), under) + 0.05)
+  return ratio(ink) >= ratio(ground) ? ink : ground
+}
+
 export function fitPixels(columns: number, rows: number, cw: number, ch: number): { width: number; height: number; scale: number } {
   let width = Math.round(columns * cw)
   let height = Math.round(rows * ch)

@@ -8,7 +8,7 @@ import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly
 import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
 import { draw, layout, layoutPixels, mix, parseDu, REST, type Tile, type Usage } from './treemap'
-import { fitPixels, paint, type PixelLook, png } from './pixmap'
+import { fitPixels, paint, type PixelLook, png, readable, type Rgb } from './pixmap'
 import { cellPixels, colorOf, ghosttyColors, type TermColors } from './term'
 import type { ZoneProps } from './zone'
 import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
@@ -2087,6 +2087,7 @@ export const register: Register = (on, options) => {
           const boxes = layoutPixels(scan.items, fit.width, fit.height, cw, ch)
           const accent = colorOf(theme.accent, termColors, light)
           const ink = colorOf(theme.fg, termColors, light)
+          const paper = termColors.bg ?? (theme.bg ? colorOf(theme.bg, termColors, light) : light ? [255, 255, 255] as Rgb : [24, 24, 24] as Rgb)
           const muted = colorOf(theme.muted, termColors, light)
           const pixelLook = (tile: Tile): PixelLook => {
             const hot = lit.find(f => inside(tile.path, f))
@@ -2095,7 +2096,9 @@ export const register: Register = (on, options) => {
             const share = total ? tile.bytes / total : 0
             const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
             const tone = hot ? colorOf(tones[t.flashTones[hot] ?? 'orange']?.solid ?? theme.accent, termColors, light) : undefined
-            return { fill: picked ? accent : tone ?? (dim ? muted : accent), alpha: picked ? 0.75 : tone ? 0.6 : dim ? 0.12 : 0.06 + 0.05 * level, ink: dim && !tone && !picked && !tile.depth ? muted : ink, bold: picked || Boolean(tone) || tile.depth === 0, rank: picked ? 2 : tone ? 1 : 0, dim }
+            const fill = picked ? accent : tone ?? (dim ? muted : accent)
+            const alpha = picked ? 0.75 : tone ? 0.6 : dim ? 0.12 : 0.06 + 0.05 * level
+            return { fill, alpha, ink: dim && !tone && !picked && !tile.depth ? muted : picked || tone ? readable(fill, alpha, ink, paper) : ink, bold: picked || Boolean(tone) || tile.depth === 0, rank: picked ? 2 : tone ? 1 : 0, dim }
           }
           const looks = boxes.map(pixelLook)
           const key = JSON.stringify([fit, ink, boxes.map((b, i) => [b.path, b.x0, b.y0, b.x1, b.y1, sized(b), looks[i]])])
