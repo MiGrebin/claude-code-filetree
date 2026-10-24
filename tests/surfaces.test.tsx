@@ -21,6 +21,7 @@ type World = {
   find?: string
   theme?: { toml: string; mtimeMs: number }
   du?: Record<string, string>
+  loc?: Record<string, string>
   duDelays?: number[]
   watch?: { after: number; change: () => string }
   links?: string[]
@@ -95,6 +96,7 @@ function world(on: any, w: World, ran: Ran) {
     if (exit) return { value: { exitCode: exit[0], stdout: '', stderr: exit[1], isStdoutTruncated: false, isStderrTruncated: false } }
     const out = w.stdout?.[argv.slice(0, 3).join(' ')]
     if (out !== undefined) return ok(out)
+    if (argv[0] === 'find' && argv.includes('grep')) return ok(w.loc?.[`${argv[1]}${argv[2] === '-maxdepth' ? ' 1' : ''}`] ?? '')
     if (argv[0] === 'find' && w.find !== undefined) return ok(w.find)
     if (argv[0] === 'du') {
       const delay = w.duDelays?.shift()
@@ -127,7 +129,7 @@ function world(on: any, w: World, ran: Ran) {
   on('process.spawn', async function* (_$: any, e: any) {
     const argv: string[] = [...e.argv]
     ran.push(argv)
-    const out = argv[0] === 'du' ? (w.du?.[argv.at(-1) ?? ''] ?? '') : ''
+    const out = argv[0] === 'du' ? (w.du?.[argv.at(-1) ?? ''] ?? '') : argv[0] === 'find' && argv.includes('grep') ? (w.loc?.[argv[1] ?? ''] ?? '') : ''
     if (out) yield { stream: 'stdout', text: out }
     if (argv[0] === 'inotifywait' && w.watch) {
       await clock.sleep(w.watch.after)
@@ -1536,6 +1538,57 @@ test('size column: the toggle swaps dates for sizes, folders are sized with du, 
   expect(ran.filter(a => a[0] === 'du').length).toBeGreaterThan(before)
   await ui.press({ key: 'size' })
   await clock.settle()
+  expect(await texts(ui)).not.toMatch(STAMP)
+  await ui.press({ key: 'size' })
+  await clock.settle()
+  expect(await texts(ui)).toMatch(STAMP)
+  await ui.unmount()
+})
+
+test('loc column: the toggle goes date, size, lines of code; code files show their count, folders the sum, pictures nothing, an edit counts its folders again, and the treemap weighs boxes by lines', { timeoutMs: 20_000, options: { column: 'size' } }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const w: World = {
+    os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: root,
+    dirs: { [root]: [['src', 'dir'], ['docs', 'dir'], ['README.md', 'file'], ['logo.png', 'file']], [`${root}/src`]: [['a.ts', 'file'], ['b.ts', 'file']], [`${root}/docs`]: [['guide.md', 'file']] },
+    status: '## main\0', numstat: '',
+    loc: {
+      [`${root} 1`]: `${root}/README.md:12\n`,
+      [root]: `${root}/README.md:12\n${root}/src/a.ts:1500\n${root}/src/b.ts:300\n${root}/docs/guide.md:40\n`,
+      [`${root}/src`]: `${root}/src/a.ts:1500\n${root}/src/b.ts:300\n`,
+      [`${root}/docs`]: `${root}/docs/guide.md:40\n`,
+    },
+  }
+  const clock = world(on, w, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await ui.press({ key: 'size' })
+  await clock.settle()
+  const shown = await texts(ui)
+  expect(shown).not.toMatch(STAMP)
+  expect(shown).toContain(' 1.8k')
+  expect(shown).toContain(' 40')
+  expect(shown).toContain(' 12')
+  const logo = find(await ui.drawn(), 'Client', 'rows').props.rows.find((r: any) => r.id === `${root}/logo.png`).right.map((x: any) => x.t).join("")
+  expect(logo).not.toMatch(/\d/)
+  const finds = () => ran.filter(a => a[0] === 'find' && a.includes('grep')).length
+  expect(ran.some(a => a[0] === 'find' && a.includes('grep') && a.includes('-maxdepth'))).toBe(true)
+  const before = finds()
+  w.loc = { ...w.loc, [`${root}/src`]: `${root}/src/a.ts:1500\n${root}/src/b.ts:900\n` }
+  await $.tool.call({ tool: 'Edit', file_path: `${root}/src/b.ts`, old_string: 'a', new_string: 'b' } as any)
+  await clock.settle()
+  await clock.settle()
+  expect(finds()).toBeGreaterThan(before)
+  expect(await texts(ui)).toContain(' 2.4k')
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  const map = mapOf(await ui.drawn()).rows.map((r: any) => r.left.map((x: any) => x.t).join('')).join('\n')
+  expect(map).toContain('src 1.8k')
+  expect(JSON.stringify(await ui.drawn())).toContain(' lines')
+  await ui.press({ key: 'size' })
+  await clock.settle()
   expect(await texts(ui)).toMatch(STAMP)
   await ui.unmount()
 })
@@ -1620,6 +1673,9 @@ test('age column: files show how long ago they changed, the toggle swaps ages fo
   shown = await texts(ui)
   expect(shown).toContain(' 1B')
   expect(shown).not.toContain(' 12m')
+  await ui.press({ key: 'size' })
+  await clock.settle()
+  expect(await texts(ui)).not.toContain(' 12m')
   await ui.press({ key: 'size' })
   await clock.settle()
   expect(await texts(ui)).toContain(' 12m')

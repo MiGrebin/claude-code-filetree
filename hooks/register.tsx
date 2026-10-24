@@ -7,6 +7,7 @@ import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
 import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
+import { counted, formatLoc, locArgv, locUsage, parseLoc, sumDirs } from './loc'
 import { draw, layout, layoutPixels, parseDu, REST, type Tile, type Usage } from './treemap'
 import { boxLook, fitPixels, inkOn, over, paint, type PixelLook, png, readable, type Rgb } from './pixmap'
 import { cellPixels, colorOf, ghosttyColors, type TermColors } from './term'
@@ -136,7 +137,7 @@ let dirty: { root: string; files: Record<string, Change> } = { root: '', files: 
 let markId = 0
 let listSeq = 0
 let lastRoot = ''
-let sizeDefault = false
+let columnDefault: Column = 'date'
 let showAge = false
 let showHints = true
 let ignoreNames: string[] = []
@@ -152,13 +153,19 @@ let mapImage: { key: string; png: string } | null = null
 let sizeEpoch = 0
 let sizeActive = 0
 let sizeQueue: string[] = []
+type Column = FileTree['column']
+const locCache = new Map<string, number>()
+const locListed = new Set<string>()
+const locBusy = new Set<string>()
+let locQueue: [string, boolean][] = []
+let locActive = 0
 const sizing = new Set<string>()
 const listLatest = new Map<string, number>()
 const unreadable = new Set<string>()
 const background = new Map<string, Background>()
 
 type Preview = { path: string; text: string; note: string; diff?: DiffLine[] }
-type Scan = { dir: string; items: Usage[]; total: number; done: boolean; stale: boolean; stopped: boolean; stop: () => void }
+type Scan = { dir: string; loc: boolean; items: Usage[]; total: number; done: boolean; stale: boolean; stopped: boolean; stop: () => void }
 const scans = new Map<string, Scan>()
 let mapLock: { anchor: string; pick: string; cursor: string } | null = null
 let mapAnchor = ''
@@ -403,7 +410,7 @@ async function reset($: EngineInterface, root: string, focus = false, ready?: Pr
   searchIndex = null
   sizeEpoch += 1
   sizeQueue = []
-  await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, showSize: prev.root ? prev.showSize : sizeDefault, split: prev.split }))
+  await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, column: prev.root ? prev.column : columnDefault, split: prev.split }))
   const title = `Files: ${root.split('/').pop() || root}`
   const listed = loadDirs($, [root])
   const repo = detectRepo($)
@@ -547,7 +554,7 @@ function pumpSizes($: EngineInterface): void {
       .then(async bytes => {
         if (epoch === sizeEpoch) return patch($, cur => (inside(cur.root, dir) ? { dirSizes: { ...cur.dirSizes, [dir]: bytes } } : {}))
         const cur = await get($)
-        if (cur.showSize && inside(cur.root, dir) && !(dir in cur.dirSizes) && !sizeQueue.includes(dir)) sizeQueue.push(dir)
+        if (cur.column === 'size' && inside(cur.root, dir) && !(dir in cur.dirSizes) && !sizeQueue.includes(dir)) sizeQueue.push(dir)
       })
       .catch(() => undefined)
       .finally(() => {
@@ -558,6 +565,50 @@ function pumpSizes($: EngineInterface): void {
   }
 }
 
+function takeLoc(files: Map<string, number>, dir: string, deep: boolean): void {
+  for (const [path, n] of files) locCache.set(path, n)
+  if (deep) {
+    for (const [d, n] of sumDirs(files, dir)) {
+      locCache.set(d, n)
+      locListed.add(d)
+    }
+  }
+  locListed.add(dir)
+}
+
+function pumpLoc($: EngineInterface): void {
+  while (locActive < SIZE_JOBS && locQueue.length) {
+    const [dir, deep] = locQueue.shift() ?? ['', false]
+    const epoch = sizeEpoch
+    const key = `${deep ? 'd' : 's'}${dir}`
+    locBusy.add(key)
+    locActive += 1
+    void (async () => {
+      if ((await osName($)) === 'win32') return
+      const t = await get($)
+      const argv = locArgv(dir, pruneArgs(t.root))
+      const run = await $.process.run(deep ? argv : [argv[0] ?? 'find', dir, '-maxdepth', '1', ...argv.slice(2)], { timeoutMs: SIZE_TIMEOUT_MS })
+      if (epoch !== sizeEpoch) return
+      takeLoc(parseLoc(run.stdout), dir, deep)
+      void $.ui.invalidate('ui.render')
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        locBusy.delete(key)
+        locActive -= 1
+        pumpLoc($)
+      })
+  }
+}
+
+function wantLoc($: EngineInterface, dirs: string[], deep: boolean): void {
+  for (const dir of dirs) {
+    if (locBusy.has(`${deep ? 'd' : 's'}${dir}`) || locQueue.some(([d, k]) => d === dir && k === deep)) continue
+    locQueue.push([dir, deep])
+  }
+  pumpLoc($)
+}
+
 function wantSizes($: EngineInterface, dirs: string[]): void {
   for (const dir of dirs) if (!sizing.has(dir) && !sizeQueue.includes(dir)) sizeQueue.push(dir)
   pumpSizes($)
@@ -566,6 +617,19 @@ function wantSizes($: EngineInterface, dirs: string[]): void {
 async function staleSizes($: EngineInterface, paths?: string[]): Promise<void> {
   sizeEpoch += 1
   sizeQueue = []
+  locQueue = []
+  if (!paths) {
+    locCache.clear()
+    locListed.clear()
+  }
+  for (const p of paths ?? []) {
+    locCache.delete(p)
+    locListed.delete(p)
+    for (let d = dirname(p), prev = p; d !== prev; prev = d, d = dirname(d)) {
+      locCache.delete(d)
+      locListed.delete(d)
+    }
+  }
   await patch($, cur => {
     if (!paths) return { dirSizes: {} }
     const keep: Record<string, number> = {}
@@ -1219,20 +1283,21 @@ function stopScans(keep = ''): void {
     if (scan.done || scan.dir === keep) continue
     scan.stopped = true
     scan.stop()
-    scans.delete(scan.dir)
+    scans.delete(`${scan.loc ? 'loc:' : ''}${scan.dir}`)
   }
 }
 
-function usageOf($: EngineInterface, dir: string): Scan {
-  const known = scans.get(dir)
+function usageOf($: EngineInterface, dir: string, loc: boolean): Scan {
+  const key = `${loc ? 'loc:' : ''}${dir}`
+  const known = scans.get(key)
   if (known && (!known.stale || !known.done)) {
-    scans.delete(dir)
-    scans.set(dir, known)
+    scans.delete(key)
+    scans.set(key, known)
     return known
   }
-  const scan: Scan = { dir, items: known?.items ?? [], total: known?.total ?? 0, done: false, stale: false, stopped: false, stop: () => undefined }
-  scans.delete(dir)
-  scans.set(dir, scan)
+  const scan: Scan = { dir, loc, items: known?.items ?? [], total: known?.total ?? 0, done: false, stale: false, stopped: false, stop: () => undefined }
+  scans.delete(key)
+  scans.set(key, scan)
   for (const [old, s] of scans) if (scans.size > SCAN_KEEP && s.done) scans.delete(old)
   void runScan($, scan, Boolean(known))
   return scan
@@ -1242,7 +1307,29 @@ async function runScan($: EngineInterface, scan: Scan, seeded: boolean): Promise
   let out: Usage[] = seeded ? [] : scan.items
   let total = 0
   try {
-    if ((await osName($)) === 'win32') {
+    if (scan.loc) {
+      if ((await osName($)) === 'win32') throw new Error('no find')
+      const stream = $.process.spawn({ argv: locArgv(scan.dir, pruneArgs((await get($)).root)) })
+      scan.stop = () => void stream.return(undefined as never).catch(() => undefined)
+      let text = ''
+      let drawn = 0
+      for await (const chunk of stream) {
+        if (scan.stopped) return
+        if (chunk.stream !== 'stdout') continue
+        text += chunk.text
+        if (seeded || Date.now() - drawn < SCAN_DRAW_MS) continue
+        drawn = Date.now()
+        out = locUsage(parseLoc(text.slice(0, text.lastIndexOf('\n') + 1)), scan.dir).items
+        scan.items = out
+        void $.ui.invalidate('ui.render')
+      }
+      if (scan.stopped) return
+      const files = parseLoc(text)
+      takeLoc(files, scan.dir, true)
+      const got = locUsage(files, scan.dir)
+      out = got.items
+      total = got.total
+    } else if ((await osName($)) === 'win32') {
       for (const entry of await $.fs.list(scan.dir)) {
         if (scan.stopped) return
         const path = join(scan.dir, entry.name)
@@ -1518,7 +1605,7 @@ async function pressHeader($: EngineInterface, id: string): Promise<void> {
     await refreshGit($)
     if (t.query.trim()) await search($, t.query)
   } else if (id === 'hidden') await patch($, cur => ({ showHidden: !cur.showHidden }))
-  else if (id === 'size') await patch($, cur => ({ showSize: !cur.showSize }))
+  else if (id === 'size') await patch($, cur => ({ column: cur.column === 'date' ? 'size' : cur.column === 'size' ? 'loc' : 'date' }))
   else if (id === 'collapse') await patch($, cur => ({ expanded: [], nodes: dropBelow(cur.nodes, cur.nodes.filter(x => x.parent === cur.root && x.kind === 'dir').map(x => x.id)) }))
   else if (id === 'unselect') await patch($, () => ({ selected: '' }))
   else if (id === 'external' && t.preview) await openFile($, t.preview, { mode: '' })
@@ -1535,7 +1622,7 @@ export const register: Register = (on, options) => {
   showReads = activity.includes('reads')
   showWrites = activity.includes('writes')
   followClaude = options?.follow !== 'off'
-  sizeDefault = options?.column === 'size'
+  columnDefault = options?.column === 'size' || options?.column === 'loc' ? options.column : 'date'
   showAge = options?.column === 'age'
   showHints = options?.hints !== 'off'
   ignoreNames = typeof options?.ignore === 'string' ? options.ignore.split(/[\s,]+/).filter(Boolean) : []
@@ -1932,7 +2019,12 @@ export const register: Register = (on, options) => {
     }
     view = { from, max }
     const shown = rows.slice(from, from + room - pinned.length)
-    if (t.showSize) wantSizes($, [...pinned, ...shown].filter(r => r.node.kind === 'dir' && !(r.node.id in t.dirSizes)).map(r => r.node.id))
+    if (t.column === 'size') wantSizes($, [...pinned, ...shown].filter(r => r.node.kind === 'dir' && !(r.node.id in t.dirSizes)).map(r => r.node.id))
+    if (t.column === 'loc') {
+      const seen = [...pinned, ...shown].map(r => r.node)
+      wantLoc($, seen.filter(n => n.kind === 'dir' && !locCache.has(n.id)).map(n => n.id), true)
+      wantLoc($, [...new Set(seen.filter(n => n.kind === 'file' && counted(n.name) && !locListed.has(n.parent)).map(n => n.parent))], false)
+    }
     const totals: [number, number] = t.top ? (t.diff[t.root] ?? [0, 0]) : [0, 0]
     const countSegs = (c: [number, number, number] | undefined): Seg[] => {
       if (!c) return []
@@ -1949,7 +2041,7 @@ export const register: Register = (on, options) => {
       { id: 'cwd', label: unicode ? '◎' : '\u{eb06}', dim: !follow, hint: 'follow the cwd' },
       { id: 'refresh', label: unicode ? '⮌' : '\u{eb37}', dim: true, hint: 'reload tree and git' },
       { id: 'hidden', label: unicode ? (t.showHidden ? '⊙' : '○') : t.showHidden ? '\u{f0b95}' : '\u{eae7}', dim: !t.showHidden, hint: t.showHidden ? 'hide hidden files' : 'show hidden files' },
-      { id: 'size', label: unicode ? '◫' : '\u{ea90}', dim: !t.showSize, hint: t.showSize ? 'show dates' : 'show sizes' },
+      { id: 'size', label: unicode ? '◫' : '\u{ea90}', dim: t.column === 'date', hint: t.column === 'date' ? 'show sizes' : t.column === 'size' ? 'show lines of code' : 'show dates' },
       { id: 'collapse', label: unicode ? '⊟' : '\u{eac5}', dim: true, hint: 'collapse all' },
       ...(nativeScroll ? [] : [{ id: 'split', label: unicode ? '⊡' : splitAt === 'top' ? '\u{ebf6}' : '\u{ec01}', dim: !t.split, hint: t.split ? 'hide preview' : 'show preview' }]),
     ]
@@ -1970,7 +2062,17 @@ export const register: Register = (on, options) => {
       const iconColor = isIgnored ? theme.muted : (gitColor ?? (n.hidden ? theme.muted : n.kind === 'dir' ? theme.accent : theme.muted))
       const nameColor = isIgnored ? theme.muted : (gitColor ?? (n.hidden ? theme.muted : theme.fg || undefined))
       const loc = t.diff[n.id]
-      const meta = t.showSize
+      const meta = t.column === 'loc'
+        ? n.kind === 'dir'
+          ? locCache.has(n.id)
+            ? (locCache.get(n.id) ?? 0) > 0 ? formatLoc(locCache.get(n.id) ?? 0) : ''
+            : '…'
+          : n.kind === 'file' && counted(n.name)
+            ? locCache.has(n.id)
+              ? formatLoc(locCache.get(n.id) ?? 0)
+              : locListed.has(n.parent) ? '' : '…'
+            : ''
+        : t.column === 'size'
         ? n.kind === 'dir'
           ? n.id in t.dirSizes
             ? formatSize(t.dirSizes[n.id] ?? -1)
@@ -2108,7 +2210,7 @@ export const register: Register = (on, options) => {
       let status = ''
       if (!target && anchor) {
         mapAnchor = anchor
-        const scan = usageOf($, anchor)
+        const scan = usageOf($, anchor, t.column === 'loc')
         const cols = Math.max(8, e.props.bodyColumns - 1)
         const tiles = layout(scan.items, cols, peekRows)
         const total = scan.done ? scan.total : scan.items.reduce((a, u) => a + u.bytes, 0)
@@ -2154,8 +2256,9 @@ export const register: Register = (on, options) => {
           const top = !dimmed(tile) && !(tile.depth % 2)
           return { name: top ? 'ansi256(0)' : 'ansi256(15)', size: top ? 'ansi256(0)' : 'ansi256(15)', bold: true, bg: top ? 'ansi256(4)' : 'ansi256(8)', rank: 0 }
         }
-        status = pick ? `${pick.name} ${formatSize(pick.bytes)} ${pct(pick.bytes)}` : `${formatSize(total)}${scan.done ? '' : ' …'}`
-        const sized = (x: Tile) => `${formatSize(x.bytes)} ${pct(x.bytes)}`
+        const amount = scan.loc ? formatLoc : formatSize
+        status = pick ? `${pick.name} ${amount(pick.bytes)} ${pct(pick.bytes)}` : `${amount(total)}${scan.loc ? ' lines' : ''}${scan.done ? '' : ' …'}`
+        const sized = (x: Tile) => `${amount(x.bytes)} ${pct(x.bytes)}`
         const pixels = Image && !imageDenied && (treemapSetting === 'image' || (treemapSetting === 'auto' && kittyTerm))
         if (pixels && tiles.length) {
           const cell = cellPx ?? { cw: 10, ch: 20 }

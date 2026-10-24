@@ -61,12 +61,13 @@
     "column": {
       "type": "string",
       "title": "Right column",
-      "description": "What the right column shows by default: date (last modified), age (time since last modified, short: now, 12m, 3h, 5d, then Oct 9 past a week and the year past a year) or size (files in bytes, folders as disk usage computed in the background). The header button toggles between size and the date or age.",
+      "description": "What the right column shows by default: date (last modified), age (time since last modified, short: now, 12m, 3h, 5d, then Oct 9 past a week and the year past a year), size (files in bytes, folders as disk usage computed in the background) or loc (non-blank lines in code, markup, config and docs files, folders as the sum, counted in the background; pictures, video, binaries and data files show nothing). The header button cycles the date or age, size and loc; in loc the treemap sizes boxes by lines.",
       "default": "date",
       "options": [
         "date",
         "age",
-        "size"
+        "size",
+        "loc"
       ]
     },
     "hints": {

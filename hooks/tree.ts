@@ -24,7 +24,7 @@ export function emptyTree(root: string): FileTree {
     selected: '',
     query: '',
     showHidden: true,
-    showSize: false,
+    column: 'date',
     dirSizes: {},
     git: {},
     diff: {},

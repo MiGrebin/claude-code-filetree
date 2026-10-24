@@ -36,7 +36,7 @@ export type FileTree = {
   selected: string
   query: string
   showHidden: boolean
-  showSize: boolean
+  column: 'date' | 'size' | 'loc'
   dirSizes: Record<string, number>
   git: Record<string, string>
   diff: Record<string, [number, number]>
