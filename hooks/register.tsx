@@ -1400,13 +1400,20 @@ async function pickTile($: EngineInterface, id: string): Promise<void> {
     await patch($, cur => ({ expanded: [...new Set([...cur.expanded, ...ancestorsOf(id, cur.root)])], cursor: id, scroll: null }))
     await revealPaths($, [id])
     if ((await get($)).nodes.find(n => n.id === id)?.kind === 'dir') return
-    const title = `Files: ${t.root.split('/').pop() || t.root}`
-    $.clock.after(100, () => void $.ui.open({ id: PANE, title, focus: true }).then(() => $.ui.focus({ requestId: PANE, key: shortcutsSetting === 'always' ? 'nav-o' : 'rows' })).catch(() => {}))
+    $.clock.after(100, () => void focusPane($, t.root, treeKey()))
     return
   }
   const kind = await $.fs.stat(id).then(s => s.kind, () => 'file')
   mapLock = kind === 'dir' ? { anchor: id, pick: '', cursor: t.cursor } : { anchor: mapAnchor, pick: id, cursor: t.cursor }
   void $.ui.invalidate('ui.render')
+}
+
+function treeKey(): string {
+  return shortcutsSetting === 'always' ? 'nav-o' : 'hk-tree'
+}
+
+function focusPane($: EngineInterface, root: string, key: string): void {
+  void $.ui.open({ id: PANE, title: `Files: ${root.split('/').pop() || root}`, focus: true }).then(() => (key ? $.ui.focus({ requestId: PANE, key }) : undefined)).catch(() => {})
 }
 
 function toggleShortcuts($: EngineInterface): void {
@@ -1454,7 +1461,7 @@ function parkPreview($: EngineInterface): void {
 
 async function closePreview($: EngineInterface): Promise<void> {
   await patch($, () => ({ preview: '', previewTop: 0 }))
-  $.clock.after(100, () => void $.ui.focus({ requestId: PANE, key: shortcutsSetting === 'always' ? 'nav-o' : 'rows' }).catch(() => {}))
+  $.clock.after(100, async () => focusPane($, (await get($)).root, treeKey()))
 }
 
 async function jumpDiff($: EngineInterface, dir: 1 | -1): Promise<void> {
@@ -1597,7 +1604,7 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   else if (key === 'home') await move(-rows.length)
   else if (key === 'end') await move(rows.length)
   else if (key === '?') toggleShortcuts($)
-  else if (key === 's') await $.ui.focus({ requestId: PANE, key: 'q' })
+  else if (key === 's') $.clock.after(50, () => focusPane($, t.root, 'q'))
   else if (cur && key === 'd') await diffFile($, cur.id)
   else if (cur && (key === 'y' || key === 'Y')) await copyPath($, cur.id, key === 'Y' || shift, surface)
   else if (cur && (key === 'right' || key === 'l') && cur.kind === 'dir' && !t.expanded.includes(cur.id)) await toggle($, cur)
@@ -2369,13 +2376,13 @@ export const register: Register = (on, options) => {
     }
     const split = await peek()
 
-    const park = () => void $.ui.focus({ requestId: PANE, key: shortcutsSetting === 'always' ? 'nav-o' : 'rows' }).catch(() => {})
+    const park = () => focusPane($, t.root, treeKey())
     const footerName = footer ? (footer !== t.root && inside(t.root, footer) ? footer.slice(t.root.endsWith('/') ? t.root.length : t.root.length + 1) : shortPath(footer)) : ''
     const allKeys: { key: string; label: string; press: () => void }[] = [
       { key: 'jkhl', label: 'move', press: () => undefined },
       { key: 'o', label: 'open', press: () => void navigate($, 'return') },
       { key: 'd', label: 'diff', press: () => void navigate($, 'd') },
-      { key: 's', label: 'search', press: () => void $.ui.focus({ requestId: PANE, key: 'q' }) },
+      { key: 's', label: 'search', press: () => focusPane($, t.root, 'q') },
       ...(e.surface === 'desktop' ? [] : [{ key: 'p', label: 'preview', press: () => void navigate($, 'p', false, e.surface).then(park) }]),
       { key: 'y', label: 'copy path', press: () => void navigate($, 'y', false, e.surface).then(park) },
       ...(shortcutsSetting === 'auto' ? [{ key: '?', label: 'hide', press: () => undefined }] : []),
@@ -2393,6 +2400,10 @@ export const register: Register = (on, options) => {
       }
     }
     const keys = allKeys.filter(k => picked.has(k.key))
+    const hidden: [string, () => void][] = [
+      ...(['j', 'k', 'h', 'l'] as const).map(k => [k, () => void navigate($, k).then(park)] as [string, () => void]),
+      ...allKeys.filter(k => k.key.length === 1 && k.key !== '?' && !picked.has(k.key)).map(k => [k.key, k.press] as [string, () => void]),
+    ]
 
     return (
       <Box flexDirection="column" minHeight={Math.max(1, e.props.scroll?.bodyRows ?? 1)} backgroundColor={theme.bg || undefined}>
@@ -2454,6 +2465,10 @@ export const register: Register = (on, options) => {
             ) : null}
           </Box>
         )}
+        <Box key="hotkeys" height={0} overflow="hidden" flexDirection="row">
+          {shortcutsSetting === 'always' ? null : <Button key="hk-tree" plain autoFocus label="o" onPress={() => void navigate($, 'return')} />}
+          {hidden.map(([k, press]) => <Button key={`hk-${k}`} plain hotkey={k} label={k} onPress={press} />)}
+        </Box>
       </Box>
     )
   })
