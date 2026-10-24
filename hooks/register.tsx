@@ -1,7 +1,7 @@
 import { type BuiltinToolResults, type EngineInterface, type Register, type RenderElement, type Timer, update } from 'claude-code'
 import { herdrError, herdrOpenCommand, herdrPane, isBinaryPath, LINUX_LAUNCH, openCommand, openWithCommand, type Target, terminalTarget, tmuxCommand, tmuxOpenCommand, words } from './open'
 import type { ButtonProps } from './button'
-import { CACHE_KEEP, cacheName, CLEAN, coderFor, EXIT_FAILED, EXIT_MISSING, fitCells, PNG_DIRECT_BYTES, PNG_DIRECT_PIXELS, pictureKind, pngSize, POLICY, POSTER } from './peek'
+import { CACHE_KEEP, cacheName, CLEAN, coderFor, EXIT_FAILED, EXIT_LOCKED, EXIT_MISSING, fitCells, PNG_DIRECT_BYTES, PNG_DIRECT_PIXELS, pictureKind, pngSize, POLICY, POSTER } from './peek'
 
 import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
@@ -109,6 +109,9 @@ let sessionDir = ''
 let splitShown = false
 let converting = false
 let nextJob: PictureJob | null = null
+let current: { job: PictureJob; stop: () => void } | null = null
+const docPages = new Map<string, number>()
+const docCounts = new Map<string, number>()
 const pictures = new Map<string, { sig: string; picture: Picture; retried?: boolean }>()
 let follow = true
 let followClaude = true
@@ -167,7 +170,7 @@ const listLatest = new Map<string, number>()
 const unreadable = new Set<string>()
 const background = new Map<string, Background>()
 
-type Preview = { path: string; text: string; note: string; diff?: DiffLine[] }
+type Preview = { path: string; text: string; note: string; diff?: DiffLine[]; page?: number }
 type Scan = { dir: string; loc: boolean; items: Usage[]; total: number; done: boolean; stale: boolean; stopped: boolean; stop: () => void }
 const scans = new Map<string, Scan>()
 let mapLock: { anchor: string; pick: string; cursor: string } | null = null
@@ -178,8 +181,8 @@ const SCAN_DRAW_MS = 100
 const STALE_MS = 1500
 const staleQueue = new Set<string>()
 let staleTimer: Timer | null = null
-type PictureJob = { path: string; kind: 'png' | 'image' | 'video'; sig: string; mtime: number; size: number }
-type Picture = { state: 'pending' } | { state: 'ready'; file: string; generation: number; width: number; height: number } | { state: 'failed'; note: string }
+type PictureJob = { path: string; key: string; kind: 'png' | 'image' | 'video' | 'pdf' | 'office'; sig: string; mtime: number; size: number; page: number; px: number; pdf: string }
+type Picture = { state: 'pending' } | { state: 'ready'; file: string; generation: number; width: number; height: number; pages?: number } | { state: 'failed'; note: string; missing?: boolean }
 
 function osName($: EngineInterface): Promise<'linux' | 'darwin' | 'win32'> {
   platform ??= (async () => {
@@ -1120,12 +1123,35 @@ async function loadPreview($: EngineInterface, path: string): Promise<void> {
   previewed = await readPreview($, path)
 }
 
-async function readPreview($: EngineInterface, path: string): Promise<Preview> {
+async function docText($: EngineInterface, path: string, page: number): Promise<string> {
+  const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase()
+  const argv = ext === 'pdf' ? ['timeout', '10', 'pdftotext', '-f', String(page), '-l', String(page), '-layout', '--', path, '-'] : ext === 'docx' || ext === 'odt' || ext === 'rtf' ? ['timeout', '10', 'pandoc', '-t', 'gfm', '--wrap=none', '--', path] : []
+  if (!argv.length) return ''
+  if (ext === 'pdf' && !docCounts.has(path)) {
+    const info = await $.process.run(['timeout', '10', 'pdfinfo', '--', path], { timeoutMs: 15_000 }).catch(() => null)
+    const all = `${info?.stdout ?? ''}${info?.stderr ?? ''}`
+    if (/Incorrect password/.test(all)) return '\0encrypted'
+    const pages = Number(/^Pages:\s*(\d+)/m.exec(all)?.[1] ?? 0)
+    if (pages) docCounts.set(path, pages)
+  }
+  const run = await $.process.run(argv, { timeoutMs: 15_000 }).catch(() => null)
+  return run?.exitCode === 0 ? run.stdout.replace(/\f/g, '\n').trimEnd() : ''
+}
+
+async function readPreview($: EngineInterface, path: string, page = 1): Promise<Preview> {
   let text = ''
   let note = ''
   try {
     const stat = await $.fs.stat(path)
+    const kind = pictureKind(path)
     if (stat.kind !== 'file') note = 'not a regular file'
+    else if (kind === 'pdf' || kind === 'office') {
+      text = await docText($, path, page)
+      if (text === '\0encrypted') {
+        text = ''
+        note = 'encrypted'
+      } else if (!text) note = kind === 'pdf' && docCounts.has(path) ? `no text on page ${page}` : `${path.split('/').pop()}, ${formatSize(stat.size)}`
+    }
     else if (stat.size > 4_000_000) note = `${formatSize(stat.size)}, too large to preview`
     else {
       text = await $.fs.read(path)
@@ -1143,7 +1169,7 @@ async function readPreview($: EngineInterface, path: string): Promise<Preview> {
   lines = lines.map(l => (l.length > PREVIEW_LINE ? `${l.slice(0, PREVIEW_LINE)}…` : l))
   const fit = fitSerialized(lines, PREVIEW_CHARS)
   if (total > PREVIEW_CHARS || fit.length < lines.length) note = `first ${fit.length.toLocaleString('en')} lines of ${total.toLocaleString('en')} characters`
-  return { path, text: fit.join('\n'), note }
+  return { path, text: fit.join('\n'), note, page }
 }
 
 async function loadDiff($: EngineInterface, path: string, folder: boolean): Promise<boolean> {
@@ -1213,17 +1239,24 @@ async function makePicture($: EngineInterface, job: PictureJob): Promise<Picture
     let file = job.path
     let size = job.kind === 'png' && job.size <= PNG_DIRECT_BYTES ? await pngHeader($, job.path) : null
     if (size && (size.width > PNG_DIRECT_PIXELS || size.height > PNG_DIRECT_PIXELS)) size = null
+    let pages = 0
     if (!size) {
-      const made = await $.process.run(['sh', '-c', POSTER, 'sh', job.path, pictureBase, pictureSession, job.sig, job.kind === 'video' ? 'video' : 'image', coderFor(job.path), String(CACHE_KEEP), POLICY], { timeoutMs: 30_000 })
+      const doc = job.kind === 'pdf' || job.kind === 'office'
+      const argv = ['sh', '-c', POSTER, 'sh', job.path, pictureBase, pictureSession, job.sig, doc ? job.kind : job.kind === 'video' ? 'video' : 'image', coderFor(job.path), String(CACHE_KEEP), POLICY, ...(doc ? [String(job.page), String(job.px), job.pdf] : [])]
+      const made = doc ? await spawnRun($, job, argv) : await $.process.run(argv, { timeoutMs: 30_000 })
+      if (!made) return { state: 'failed', note: 'cancelled' }
       const why = made.stderr.trim().split('\n').filter(Boolean)[0] ?? ''
-      if (made.exitCode === EXIT_MISSING) return { state: 'failed', note: why || 'no decoder on PATH' }
+      if (made.exitCode === EXIT_MISSING) return { state: 'failed', note: why || 'no decoder on PATH', missing: true }
+      if (made.exitCode === EXIT_LOCKED) return { state: 'failed', note: 'encrypted' }
       if (made.exitCode === EXIT_FAILED) return { state: 'failed', note: `could not decode${why ? `: ${why}` : ''}` }
-      if (made.exitCode !== 0 || !made.stdout.trim().startsWith('/')) return { state: 'failed', note: why || `could not decode, exit ${made.exitCode}` }
-      file = made.stdout.trim()
+      const [out = '', count = ''] = made.stdout.trim().split('\n')
+      if (made.exitCode !== 0 || !out.startsWith('/')) return { state: 'failed', note: why || `could not decode, exit ${made.exitCode}` }
+      file = out
+      pages = Number(count) || 0
       sessionDir = dirname(file)
       size = await pngHeader($, file)
     }
-    return size ? { state: 'ready', file, generation: Math.floor(job.mtime), ...size } : { state: 'failed', note: 'could not read the picture size' }
+    return size ? { state: 'ready', file, generation: Math.floor(job.mtime) + job.page * 7 + job.px, ...size, ...(pages ? { pages } : {}) } : { state: 'failed', note: 'could not read the picture size' }
   } catch (err) {
     return { state: 'failed', note: String((err as Error)?.message ?? err).split('\n')[0] ?? 'could not decode' }
   }
@@ -1235,9 +1268,35 @@ function forget($: EngineInterface, path: string): void {
   if (old?.picture.state === 'ready' && old.picture.file !== path) void $.process.run(['rm', '-f', '--', old.picture.file], { timeoutMs: 5_000 }).catch(() => undefined)
 }
 
+async function spawnRun($: EngineInterface, job: PictureJob, argv: string[]): Promise<{ exitCode: number; stdout: string; stderr: string } | null> {
+  const stream = $.process.spawn({ argv })
+  let stopped = false
+  current = { job, stop: () => { stopped = true; void stream.return(undefined as never).catch(() => undefined) } }
+  let stdout = ''
+  let stderr = ''
+  let exitCode = 1
+  try {
+    for (;;) {
+      const step = await stream.next()
+      if (step.done) {
+        exitCode = step.value?.code ?? 1
+        break
+      }
+      if (step.value.stream === 'stdout') stdout += step.value.text
+      else stderr += step.value.text
+    }
+  } catch {
+    if (!stopped) throw new Error('could not start sh')
+  } finally {
+    current = null
+  }
+  return stopped ? null : { exitCode, stdout, stderr }
+}
+
 async function convert($: EngineInterface, job: PictureJob): Promise<void> {
   if (converting) {
-    if (nextJob && pictures.get(nextJob.path)?.sig === nextJob.sig) pictures.delete(nextJob.path)
+    if (nextJob && pictures.get(nextJob.key)?.sig === nextJob.sig) pictures.delete(nextJob.key)
+    if (current && current.job.path !== job.path && (current.job.kind === 'pdf' || current.job.kind === 'office')) current.stop()
     nextJob = job
     return
   }
@@ -1245,8 +1304,9 @@ async function convert($: EngineInterface, job: PictureJob): Promise<void> {
   let cur: PictureJob | null = job
   while (cur) {
     const made = await makePicture($, cur)
-    const entry = pictures.get(cur.path)
-    if (entry?.sig === cur.sig) entry.picture = made
+    const entry = pictures.get(cur.key)
+    if (entry?.sig === cur.sig && made.state === 'failed' && made.note === 'cancelled') pictures.delete(cur.key)
+    else if (entry?.sig === cur.sig) entry.picture = made
     else if (made.state === 'ready' && made.file !== cur.path) void $.process.run(['rm', '-f', '--', made.file], { timeoutMs: 5_000 }).catch(() => undefined)
     void $.ui.invalidate('ui.render')
     cur = nextJob
@@ -1255,29 +1315,34 @@ async function convert($: EngineInterface, job: PictureJob): Promise<void> {
   converting = false
 }
 
-async function picture($: EngineInterface, path: string): Promise<Picture | null> {
+async function picture($: EngineInterface, path: string, page = 0, px = 0): Promise<Picture | null> {
   const kind = pictureKind(path)
   if (!kind) return null
   const stat = await $.fs.stat(path).catch(() => null)
   if (!stat) return { state: 'failed', note: 'could not read' }
   if (stat.kind !== 'file') return { state: 'failed', note: 'not a regular file' }
-  const sig = cacheName(path, stat.mtimeMs, stat.size)
-  const known = pictures.get(path)
+  const doc = kind === 'pdf' || kind === 'office'
+  const at = doc ? Math.max(1, page) : 0
+  const wide = doc ? Math.max(200, Math.min(1600, Math.round(px / 100) * 100)) : 0
+  const key = doc ? `${path}\0${at}` : path
+  const sig = cacheName(path, stat.mtimeMs, stat.size, at, wide)
+  const pdf = kind === 'office' ? cacheName(path, stat.mtimeMs, stat.size, 0, 0, 'pdf') : ''
+  const known = pictures.get(key)
   const gone = known?.sig === sig && known.picture.state === 'ready' && known.picture.file !== path && !(await $.fs.stat(known.picture.file).then(f => f.kind === 'file', () => false))
   if (gone && known.retried) known.picture = { state: 'failed', note: 'the preview cache was cleared' }
-  if (gone && !known.retried) pictures.delete(path)
+  if (gone && !known.retried) pictures.delete(key)
   else if (known?.sig === sig) {
-    pictures.delete(path)
-    pictures.set(path, known)
+    pictures.delete(key)
+    pictures.set(key, known)
     return known.picture
   }
-  if (known && pictures.has(path)) forget($, path)
-  pictures.set(path, { sig, picture: { state: 'pending' }, retried: gone })
+  if (known && pictures.has(key)) forget($, key)
+  pictures.set(key, { sig, picture: { state: 'pending' }, retried: gone })
   for (const old of pictures.keys()) {
     if (pictures.size <= CACHE_KEEP) break
     forget($, old)
   }
-  void convert($, { path, kind, sig, mtime: stat.mtimeMs, size: stat.size })
+  void convert($, { path, key, kind, sig, mtime: stat.mtimeMs, size: stat.size, page: at, px: wide, pdf })
   return { state: 'pending' }
 }
 
@@ -1584,6 +1649,19 @@ async function openNode($: EngineInterface, n: FileNode): Promise<void> {
   } else await openFile($, n.id)
 }
 
+function turnPage($: EngineInterface, by: number): boolean {
+  const kind = peekPath ? pictureKind(peekPath) : ''
+  if (kind !== 'pdf' && kind !== 'office') return false
+  if (kind === 'office' && !pictures.has(`${peekPath}\0${docPages.get(peekPath) ?? 1}`)) return true
+  const now = docPages.get(peekPath) ?? 1
+  const next = Math.max(1, Math.min(docCounts.get(peekPath) ?? now + 1, now + by))
+  if (next !== now) {
+    docPages.set(peekPath, next)
+    void $.ui.invalidate('ui.render')
+  }
+  return true
+}
+
 async function navigate($: EngineInterface, key: string, shift = false, surface?: string): Promise<void> {
   const t = await get($)
   const rows = visibleRows(t)
@@ -1596,6 +1674,7 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   const page = Math.max(1, peekRows - 1)
   const peek: Record<string, number> = { f: page, b: -page, pageup: -page, pagedown: page }
   if (key === 'p' && surface !== 'desktop') await toggleSplit($)
+  else if (t.split && splitShown && surface !== 'desktop' && (key === '[' || key === ']') && turnPage($, key === ']' ? 1 : -1)) return
   else if (t.split && splitShown && surface !== 'desktop' && key in peek) scrollSplit($, peekTop + (peek[key] ?? 0))
   else if (key === 'up' || key === 'k') await move(-1)
   else if (key === 'down' || key === 'j') await move(1)
@@ -1828,6 +1907,7 @@ export const register: Register = (on, options) => {
         const page = Math.max(1, peekRows - 1)
         const by: Record<string, number> = { up: -1, k: -1, down: 1, j: 1, f: page, b: -page, pageup: -page, pagedown: page, space: page, ' ': page, home: -Infinity, end: Infinity }
         if (data.key === 'p') await toggleSplit($)
+        else if (data.key === '[' || data.key === ']') turnPage($, data.key === ']' ? 1 : -1)
         else if (data.key in by) scrollSplit($, peekTop + (by[data.key] ?? 0))
       }
       return {}
@@ -1974,7 +2054,7 @@ export const register: Register = (on, options) => {
     if (t.preview) {
       if (previewed?.path !== t.preview) await loadPreview($, t.preview)
       const p = previewed
-      const markdown = /\.(md|markdown|mdx)$/i.test(t.preview)
+      const markdown = /\.(md|markdown|mdx|docx|odt|rtf)$/i.test(t.preview)
       const all = p?.diff?.length ?? (p?.text ?? '').split('\n').length
       previewRows = nativeScroll ? all : Math.max(4, (e.props.scroll?.bodyRows ?? 40) - (p?.note ? 3 : 2))
       const start = nativeScroll ? 0 : p?.diff ? Math.min(t.previewTop, Math.max(0, all - 1)) : Math.min(t.previewTop, Math.max(0, all - previewRows))
@@ -2233,7 +2313,16 @@ export const register: Register = (on, options) => {
       const rule = <Text key="peek-rule" color={theme.muted}>{'─'.repeat(Math.max(1, e.props.bodyColumns))}</Text>
       const shown = target || anchor
       const name = shown ? (shown === t.root ? shown.split('/').pop() || shown : inside(t.root, shown) ? relative(t.root, shown) : shortPath(shown)) : ''
-      const pic = target ? await picture($, target) : null
+      const docKind = target ? pictureKind(target) : ''
+      const isDoc = docKind === 'pdf' || docKind === 'office'
+      const page = isDoc ? (docPages.get(target) ?? 1) : 0
+      const px = Math.round(Math.max(1, e.props.bodyColumns - 1) * (cellPx?.cw ?? 10))
+      const raw = target && (!isDoc || (Image && !imageDenied)) ? await picture($, target, page, px) : null
+      const pic = isDoc && raw && raw.state !== 'ready' && !(raw.state === 'failed' && raw.note === 'encrypted') ? null : raw
+      if (isDoc && raw?.state === 'ready' && raw.pages) {
+        docCounts.set(target, raw.pages)
+        if (page < raw.pages) void picture($, target, page + 1, px)
+      }
       if (!target || pic) overPeek = false
       let content: RenderElement
       let status = ''
@@ -2338,23 +2427,26 @@ export const register: Register = (on, options) => {
       else if (pic) {
         if (pic.state === 'ready' && Image) {
           const fit = fitCells(pic, Math.max(1, e.props.bodyColumns - 1), peekRows)
-          status = `${pic.width}×${pic.height}`
+          status = isDoc ? `p ${page}/${pic.pages ?? '?'}` : `${pic.width}×${pic.height}`
           content = <Image key="peek-image" source={{ file: pic.file, format: 'png', generation: pic.generation }} columns={fit.columns} rows={fit.rows} alt={name} />
         } else content = <Text color={theme.muted}>{pic.state === 'pending' ? 'decoding…' : pic.state === 'failed' ? pic.note : 'images show in the terminal'}</Text>
       } else {
-        if (peeked?.path !== target) peeked = await readPreview($, target)
+        if (peeked?.path !== target || (docKind === 'pdf' && peeked.page !== page)) {
+          peeked = await readPreview($, target, page)
+          if (docKind === 'pdf') peekTop = start = 0
+        }
         const lines = peeked.text.split('\n')
         const last = Math.max(0, lines.length - peekRows)
         start = Math.min(start, last)
-        const markdown = /\.(md|markdown|mdx)$/i.test(target)
+        const markdown = /\.(md|markdown|mdx|docx|odt|rtf)$/i.test(target)
         const win = previewLines(peeked.text, start, peekRows, markdown)
-        status = peeked.text ? `${start + 1}–${Math.min(lines.length, start + peekRows)}/${lines.length}` : ''
+        status = `${docKind === 'pdf' ? `p ${page}${docCounts.has(target) ? `/${docCounts.get(target)}` : ''} ` : ''}${peeked.text ? `${start + 1}–${Math.min(lines.length, start + peekRows)}/${lines.length}` : ''}`.trim()
         const size = Math.max(1, Math.round((peekRows * peekRows) / Math.max(1, lines.length)))
         const bar = lines.length > peekRows ? { pos: last ? Math.round((start / last) * (peekRows - size)) : 0, size, thumb: theme.accent, track: theme.muted } : undefined
         if (!peeked.text) overPeek = false
         content = peeked.text
           ? <Client key="peek" module="./rows.tsx" props={{ rows: [], active: '', ...rowColors, pointer, ...(bar ? { bar } : {}), preview: { text: win.text, path: target, startLine: win.top + 1, markdown, rows: peekRows } } satisfies RowsProps} />
-          : <Text color={theme.muted}>{peeked.note || 'empty file'}</Text>
+          : <Text color={theme.muted}>{raw?.state === 'pending' ? 'converting…' : peeked.note || 'empty file'}</Text>
       }
       const title = (
         <Box key="peek-title" flexDirection="row" height={1} overflow="hidden">
@@ -2376,7 +2468,8 @@ export const register: Register = (on, options) => {
     }
     const split = await peek()
 
-    const park = () => focusPane($, t.root, treeKey())
+    const paging = splitShown && Boolean(peekPath) && (pictureKind(peekPath) === 'pdf' || (pictureKind(peekPath) === 'office' && Boolean(Image) && !imageDenied && !inTmux && !inHerdr))
+    const park = () => focusPane($, t.root, paging ? 'rows' : treeKey())
     const footerName = footer ? (footer !== t.root && inside(t.root, footer) ? footer.slice(t.root.endsWith('/') ? t.root.length : t.root.length + 1) : shortPath(footer)) : ''
     const allKeys: { key: string; label: string; press: () => void }[] = [
       { key: 'jkhl', label: 'move', press: () => undefined },
@@ -2385,12 +2478,13 @@ export const register: Register = (on, options) => {
       { key: 's', label: 'search', press: () => focusPane($, t.root, 'q') },
       ...(e.surface === 'desktop' ? [] : [{ key: 'p', label: 'preview', press: () => void navigate($, 'p', false, e.surface).then(park) }]),
       { key: 'y', label: 'copy path', press: () => void navigate($, 'y', false, e.surface).then(park) },
+      ...(paging ? [{ key: '[ ]', label: 'page', press: () => void (turnPage($, 1), park()) }] : []),
       ...(shortcutsSetting === 'auto' ? [{ key: '?', label: 'hide', press: () => undefined }] : []),
     ]
     const picked = new Set<string>()
     if (shortcutsShown) {
       let room = width - (footerName ? 10 + Math.min(footerName.length, 6) : 0) - (latest ? 6 + latest.label.length : 0)
-      for (const key of ['?', 'jkhl', 'd', 'o', 's', 'p', 'y']) {
+      for (const key of ['?', 'jkhl', '[ ]', 'd', 'o', 's', 'p', 'y']) {
         const k = allKeys.find(x => x.key === key)
         if (!k) continue
         const w = (key === 'jkhl' ? 7 : key.length) + k.label.length + 4
@@ -2458,6 +2552,8 @@ export const register: Register = (on, options) => {
               <Box flexDirection="row" flexShrink={0} gap={2} marginLeft={2}>
                 {keys.map(k => k.key === 'jkhl'
                   ? <Text key="nav-move" dimColor><Text color={theme.accent}>j k h l</Text>: move</Text>
+                  : k.key === '[ ]'
+                  ? <Button key="nav-page" plain dimColor label={`[ ]: ${k.label}`} onPress={k.press} />
                   : k.key === '?'
                   ? <Button key="nav-help" plain dimColor label={`?: ${k.label}`} onPress={() => { toggleShortcuts($); park() }} />
                   : <Button key={`nav-${k.key}`} plain dimColor autoFocus={k.key === 'o' && shortcutsSetting === 'always' ? true : undefined} hotkey={k.key} label={k.label} onPress={k.press} />)}

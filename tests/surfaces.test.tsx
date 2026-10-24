@@ -32,6 +32,7 @@ type World = {
   untrackedPatch?: string
   unborn?: boolean
   diffTree?: string[]
+  poster?: (argv: string[]) => string
 }
 type Ran = string[][]
 const HERDR_SPLIT = '{"id":"cli:pane:split","result":{"pane":{"agent_status":"unknown","cwd":"/home/k/proj","focused":false,"pane_id":"w1:p37","parent_pane_id":"w1:p35","tab_id":"w1:tV","workspace_id":"w1"},"type":"pane_info"}}'
@@ -131,6 +132,7 @@ function world(on: any, w: World, ran: Ran) {
     ran.push(argv)
     const out = argv[0] === 'du' ? (w.du?.[argv.at(-1) ?? ''] ?? '') : argv[0] === 'find' && argv.includes('grep') ? (w.loc?.[argv[1] ?? ''] ?? '') : ''
     if (out) yield { stream: 'stdout', text: out }
+    if (argv[0] === 'sh' && w.poster) yield { stream: 'stdout', text: w.poster(argv) }
     if (argv[0] === 'inotifywait' && w.watch) {
       await clock.sleep(w.watch.after)
       yield { stream: 'stdout', text: w.watch.change() }
@@ -1926,6 +1928,56 @@ function peekOf(tree: any): any {
   }
   return undefined
 }
+
+test('split preview: a PDF draws its page as a picture with p N/M, prefetches the next page, ] and [ turn pages within the count, and a docx is converted once for every page', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const cache = '/run/user/1000/filetree-preview-1000/test-session'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k', XDG_RUNTIME_DIR: '/run/user/1000' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['doc.pdf', 'file'], ['note.docx', 'file']], [cache]: [['p1.png', 'file'], ['p2.png', 'file'], ['p3.png', 'file']] },
+    stdout: { 'od -An -tu1': PNG_HEAD },
+    poster: argv => `${cache}/p${argv[12]}.png\n3`,
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await ui.press({ key: 'split' })
+  await ui.post({ key: 'k' }, { in: 'rows' })
+  await clock.settle()
+  await clock.settle()
+  let shown = JSON.stringify(await ui.drawn())
+  expect(shown).toContain(`"file":"${cache}/p1.png"`)
+  expect(shown).toContain('p 1/3')
+  const posters = () => ran.filter(a => a[0] === 'sh' && a.includes(`${root}/doc.pdf`))
+  expect(posters()[0]?.slice(8, 9)).toEqual(['pdf'])
+  expect(posters().map(a => a[12])).toEqual(['1', '2'])
+  await ui.post({ key: ']' }, { in: 'rows' })
+  await clock.settle()
+  await clock.settle()
+  shown = JSON.stringify(await ui.drawn())
+  expect(shown).toContain(`"file":"${cache}/p2.png"`)
+  expect(shown).toContain('p 2/3')
+  await ui.post({ key: ']' }, { in: 'rows' })
+  await clock.settle()
+  await ui.post({ key: ']' }, { in: 'rows' })
+  await clock.settle()
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).toContain('p 3/3')
+  await ui.post({ key: '[' }, { in: 'rows' })
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).toContain('p 2/3')
+  expect(posters().map(a => a[12])).toEqual(['1', '2', '3'])
+  await ui.post({ key: 'j' }, { in: 'rows' })
+  await clock.settle()
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).toContain('p 1/3')
+  const office = ran.filter(a => a[0] === 'sh' && a.includes(`${root}/note.docx`))
+  expect(office.map(a => [a[8], a[12]])).toEqual([['office', '1'], ['office', '2']])
+  expect(office[0]?.[14]).toMatch(/^[0-9a-f]{32}\.pdf$/)
+  expect(office[1]?.[14]).toBe(office[0]?.[14])
+})
 
 test('split preview: the header button shows the file under the cursor below a rule, the wheel, Page Down, f and End scroll it with a scrollbar, pictures draw as images, and the button hides it', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
