@@ -151,7 +151,7 @@
     "split": {
       "type": "string",
       "title": "Preview pane",
-      "description": "Where the split preview of the file under the cursor sits when the header button or p shows it: bottom (under the tree, above the status line) or top (under the header). It starts hidden; text scrolls with the wheel over it, f/b or Page Up/Down, and images and video poster frames draw through the kitty graphics protocol in terminals that support it.",
+      "description": "Where the split preview of the file under the cursor sits when the header button or p shows it: bottom (under the tree, above the status line) or top (under the header). It starts hidden; text scrolls with the wheel over it, f/b or Page Up/Down, images, video poster frames and PDF or office document pages draw through the kitty graphics protocol in terminals that support it, and [ and ] turn a document's pages.",
       "default": "bottom",
       "options": [
         "bottom",
