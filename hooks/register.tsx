@@ -2601,14 +2601,14 @@ export const register: Register = (on, options) => {
                 {keys.map(k => k.key === 'jkhl'
                   ? <Text key="nav-move" dimColor><Text color={theme.accent}>j k h l</Text>: move</Text>
                   : k.key === '[ ]'
-                  ? <Button key="nav-page" plain dimColor label={`[ ]: ${k.label}`} onPress={k.press} />
+                  ? <Button key="nav-page" plain dimColor label={`[ ]: ${k.label}`} onPress={k.press}><Text color={theme.accent}>[ ]</Text>{`: ${k.label}`}</Button>
                   : k.key === '?'
-                  ? <Button key="nav-help" plain dimColor label={`?: ${k.label}`} onPress={() => { toggleShortcuts($); park() }} />
+                  ? <Button key="nav-help" plain dimColor label={`?: ${k.label}`} onPress={() => { toggleShortcuts($); park() }}><Text color={theme.accent}>?</Text>{`: ${k.label}`}</Button>
                   : <Button key={`nav-${k.key}`} plain dimColor autoFocus={k.key === 'o' && shortcutsSetting === 'always' ? true : undefined} hotkey={k.key} label={k.label} onPress={k.press} />)}
               </Box>
             ) : shortcutsSetting === 'auto' ? (
               <Box flexShrink={0}>
-                <Button key="nav-help" plain dimColor label="?: shortcuts" onPress={() => { toggleShortcuts($); park() }} />
+                <Button key="nav-help" plain dimColor label="?: shortcuts" onPress={() => { toggleShortcuts($); park() }}><Text color={theme.accent}>?</Text>: shortcuts</Button>
               </Box>
             ) : null}
             <Box flexGrow={1} />

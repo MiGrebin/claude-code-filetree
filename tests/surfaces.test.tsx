@@ -1770,6 +1770,7 @@ test('the root row has a folder glyph, k from the first row selects it, the spli
   const footer = (d: any) => JSON.stringify(d)
   expect(footer(await ui.drawn())).toContain('"key":"root","label":"■ proj"')
   expect(footer(await ui.drawn())).toContain('"key":"nav-help","label":"?: shortcuts"')
+  expect(footer(await ui.drawn())).toMatch(/"key":"nav-help"[^\]]*"children":\[\{"type":"Text","props":\{"color":"ansi256\(4\)"\},"children":\["\?"\]\}/)
   await ui.press({ key: 'split' })
   await clock.settle()
   await ui.post({ key: 'home' }, { in: 'rows' })
