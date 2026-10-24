@@ -82,34 +82,42 @@ function squarify(areas: number[], x: number, y: number, w: number, h: number): 
   return out
 }
 
-function place(usage: Usage[], x0: number, y0: number, x1: number, y1: number, parent?: Tile): Tile[] {
+type Unit = { cw: number; ch: number; aspect: number; head: number }
+const CELLS: Unit = { cw: 1, ch: 1, aspect: CELL_ASPECT, head: 3 }
+
+function place(usage: Usage[], x0: number, y0: number, x1: number, y1: number, u: Unit, parent?: Tile): Tile[] {
   const w = x1 - x0
-  const h = (y1 - y0) * CELL_ASPECT
+  const h = (y1 - y0) * u.aspect
+  const minArea = MIN_AREA * u.cw * u.cw
   const sorted = usage.filter(u => u.bytes > 0).sort((a, b) => b.bytes - a.bytes)
   const total = sorted.reduce((a, u) => a + u.bytes, 0)
   if (!total || w < 1 || h < 1) return []
-  let keep = sorted.findIndex((u, i) => i >= MAX_TILES - 1 || (u.bytes * w * h) / total < MIN_AREA)
+  let keep = sorted.findIndex((u, i) => i >= MAX_TILES - 1 || (u.bytes * w * h) / total < minArea)
   keep = keep < 0 ? sorted.length : Math.max(1, keep)
   const rest = sorted.slice(keep).reduce((a, u) => a + u.bytes, 0)
-  const weigh = (u: Usage) => (u.path.startsWith(REST) ? Math.max(u.bytes, (Math.max(MIN_AREA, 8 * Math.min(w, h)) * total) / (w * h)) : u.bytes)
+  const weigh = (x: Usage) => (x.path.startsWith(REST) ? Math.max(x.bytes, (Math.max(minArea, 8 * u.cw * Math.min(w, h)) * total) / (w * h)) : x.bytes)
   const shown: Usage[] = sorted.slice(0, keep)
   if (rest > 0) shown.push({ path: `${REST}${parent?.path ?? ''}`, name: `+${sorted.length - keep}`, bytes: rest })
   shown.sort((a, b) => weigh(b) - weigh(a))
   const scale = (w * h) / shown.reduce((a, u) => a + weigh(u), 0)
   const rects = squarify(shown.map(u => weigh(u) * scale), 0, 0, w, h)
-  return shown.flatMap((u, i) => {
+  return shown.flatMap((s, i) => {
     const r = rects[i]
     if (!r) return []
-    const tile: Tile = { path: u.path, name: u.name, bytes: u.bytes, x0: x0 + Math.round(r.x), x1: x0 + Math.round(r.x + r.w), y0: y0 + Math.round(r.y / CELL_ASPECT), y1: y0 + Math.round((r.y + r.h) / CELL_ASPECT), depth: parent ? parent.depth + 1 : 0, nested: false, ...(parent ? { parent } : {}) }
+    const tile: Tile = { path: s.path, name: s.name, bytes: s.bytes, x0: x0 + Math.round(r.x), x1: x0 + Math.round(r.x + r.w), y0: y0 + Math.round(r.y / u.aspect), y1: y0 + Math.round((r.y + r.h) / u.aspect), depth: parent ? parent.depth + 1 : 0, nested: false, ...(parent ? { parent } : {}) }
     if (tile.x1 <= tile.x0 || tile.y1 <= tile.y0) return []
-    const inner = !parent && u.kids?.length && tile.x1 - tile.x0 >= NEST_COLUMNS && tile.y1 - tile.y0 >= NEST_ROWS ? place(u.kids, tile.x0, tile.y0 + 3, tile.x1, tile.y1, tile) : []
+    const inner = !parent && s.kids?.length && tile.x1 - tile.x0 >= NEST_COLUMNS * u.cw && tile.y1 - tile.y0 >= NEST_ROWS * u.ch ? place(s.kids, tile.x0, tile.y0 + Math.round(u.head * u.ch), tile.x1, tile.y1, u, tile) : []
     tile.nested = inner.length > 0
     return [tile, ...inner]
   })
 }
 
 export function layout(usage: Usage[], columns: number, rows: number): Tile[] {
-  return place(usage, 0, 0, columns - 1, rows - 1)
+  return place(usage, 0, 0, columns - 1, rows - 1, CELLS)
+}
+
+export function layoutPixels(usage: Usage[], width: number, height: number, cw: number, ch: number): Tile[] {
+  return place(usage, 0, 0, width, height, { cw, ch, aspect: 1, head: 2 })
 }
 
 export function draw(tiles: Tile[], columns: number, rows: number, look: (t: Tile) => TileLook, label: (t: Tile) => string): RowSpec[] {

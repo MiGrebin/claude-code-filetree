@@ -7,7 +7,10 @@ import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
 import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
-import { draw, layout, mix, parseDu, REST, type Tile, type Usage } from './treemap'
+import { draw, layout, layoutPixels, mix, parseDu, REST, type Tile, type Usage } from './treemap'
+import { fitPixels, paint, type PixelLook, png } from './pixmap'
+import { cellPixels, colorOf, ghosttyColors, type TermColors } from './term'
+import type { ZoneProps } from './zone'
 import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
 import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR } from './icons'
 import {
@@ -134,6 +137,13 @@ let showHints = true
 let ignoreNames: string[] = []
 let searchGap = true
 let showShortcuts = true
+let treemapSetting: 'auto' | 'image' | 'cells' | 'off' = 'auto'
+let kittyTerm = false
+let imageDenied = false
+let imageChecked = false
+let cellPx: { cw: number; ch: number } | null = null
+let termColors: TermColors = { palette: {} }
+let mapImage: { key: string; png: string } | null = null
 let sizeEpoch = 0
 let sizeActive = 0
 let sizeQueue: string[] = []
@@ -1480,6 +1490,7 @@ export const register: Register = (on, options) => {
   ignoreNames = typeof options?.ignore === 'string' ? options.ignore.split(/[\s,]+/).filter(Boolean) : []
   searchGap = options?.spacing !== 'off'
   showShortcuts = options?.shortcuts !== 'off'
+  treemapSetting = options?.treemap === 'image' || options?.treemap === 'cells' || options?.treemap === 'off' ? options.treemap : 'auto'
   openWithSetting = typeof options?.open === 'string' ? options.open : ''
   binariesInDefaultApp = options?.binaries === 'default app'
   editWithSetting = typeof options?.edit === 'string' ? options.edit.trim() : ''
@@ -1503,6 +1514,12 @@ export const register: Register = (on, options) => {
     void (async () => {
       const ready = (async () => {
         pointer = await finePointerOk($)
+        const termProgram = await $.env.get('TERM_PROGRAM')
+        kittyTerm = !windows && !inTmux && !inHerdr && (termProgram === 'ghostty' || Boolean(await $.env.get('KITTY_WINDOW_ID')) || /kitty|ghostty/.test((await $.env.get('TERM')) ?? ''))
+        if (treemapSetting === 'image' || (treemapSetting === 'auto' && kittyTerm)) {
+          cellPx = await cellPixels($)
+          if (termProgram === 'ghostty') termColors = await ghosttyColors($)
+        }
         try {
           const remote = Boolean((await $.env.get('SSH_CONNECTION')) || (await $.env.get('SSH_TTY')))
           noNerd = !remote && (windows || (await fontState($, 'f04eb')) !== 'ok')
@@ -2035,7 +2052,8 @@ export const register: Register = (on, options) => {
       if (!target || pic) overPeek = false
       let content: RenderElement
       let status = ''
-      if (!target && anchor) {
+      if (!target && anchor && treemapSetting === 'off') content = <Text> </Text>
+      else if (!target && anchor) {
         mapAnchor = anchor
         const scan = usageOf($, anchor)
         const cols = Math.max(8, e.props.bodyColumns - 1)
@@ -2058,8 +2076,54 @@ export const register: Register = (on, options) => {
           return { name: dim && !tone && !picked && !tile.depth ? theme.muted : ink, size: ink, bold: picked || Boolean(tone) || tile.depth === 0, bg, rank: picked ? 2 : tone ? 1 : 0 }
         }
         status = pick ? `${pick.name} ${formatSize(pick.bytes)} ${pct(pick.bytes)}` : `${formatSize(total)}${scan.done ? '' : ' …'}`
-        content = tiles.length
-          ? <Client key="treemap" module="./rows.tsx" props={{ rows: draw(tiles, cols, peekRows, look, x => `${formatSize(x.bytes)} ${pct(x.bytes)}`), active: '', ...rowColors, pointer } satisfies RowsProps} />
+        const sized = (x: Tile) => `${formatSize(x.bytes)} ${pct(x.bytes)}`
+        const pixels = Image && !imageDenied && (treemapSetting === 'image' || (treemapSetting === 'auto' && kittyTerm))
+        if (pixels && tiles.length) {
+          const cell = cellPx ?? { cw: 10, ch: 20 }
+          const k = (Math.max(1, Math.round((cell.ch * 0.75) / 16)) * 16) / 0.75 / cell.ch
+          const fit = fitPixels(cols, peekRows, cell.cw * k, cell.ch * k)
+          const cw = (cell.cw * k) / fit.scale
+          const ch = (cell.ch * k) / fit.scale
+          const boxes = layoutPixels(scan.items, fit.width, fit.height, cw, ch)
+          const accent = colorOf(theme.accent, termColors, light)
+          const ink = colorOf(theme.fg, termColors, light)
+          const muted = colorOf(theme.muted, termColors, light)
+          const pixelLook = (tile: Tile): PixelLook => {
+            const hot = lit.find(f => inside(tile.path, f))
+            const picked = tile.path === lock?.pick
+            const dim = tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
+            const share = total ? tile.bytes / total : 0
+            const level = dim ? 0 : 1 + Math.round(3 * Math.sqrt(share)) + tile.depth
+            const tone = hot ? colorOf(tones[t.flashTones[hot] ?? 'orange']?.solid ?? theme.accent, termColors, light) : undefined
+            return { fill: picked ? accent : tone ?? (dim ? muted : accent), alpha: picked ? 0.75 : tone ? 0.6 : dim ? 0.12 : 0.06 + 0.05 * level, ink: dim && !tone && !picked && !tile.depth ? muted : ink, bold: picked || Boolean(tone) || tile.depth === 0, rank: picked ? 2 : tone ? 1 : 0, dim }
+          }
+          const looks = boxes.map(pixelLook)
+          const key = JSON.stringify([fit, ink, boxes.map((b, i) => [b.path, b.x0, b.y0, b.x1, b.y1, sized(b), looks[i]])])
+          if (mapImage?.key !== key) {
+            const byTile = new Map(boxes.map((b, i) => [b, looks[i] as PixelLook]))
+            mapImage = { key, png: png(paint(boxes, fit.width, fit.height, ch, b => byTile.get(b) as PixelLook, sized), fit.width, fit.height).toBase64() }
+          }
+          const zone: ZoneProps = { columns: cols, rows: peekRows, boxes: boxes.map(b => [b.path, b.x0 / cw, b.y0 / ch, b.x1 / cw, b.y1 / ch]) }
+          if (!imageChecked) {
+            imageChecked = true
+            $.clock.after(300, () => void $.ui.blit({ requestId: PANE, key: 'treemap-image', source: { png: mapImage?.png ?? '' } }).then(r => {
+              if (r.deny && /alt/i.test(r.deny)) {
+                imageDenied = true
+                $.ui.invalidate('ui.render')
+              }
+              if (r.deny) imageChecked = false
+            }))
+          }
+          content = (
+            <Box key="treemap-box" position="relative" height={peekRows} width={cols}>
+              <Image key="treemap-image" source={{ png: mapImage.png }} columns={cols} rows={peekRows} alt=" " />
+              <Box position="absolute" top={0} left={0}>
+                <Client key="treemap" module="./zone.tsx" props={zone} />
+              </Box>
+            </Box>
+          )
+        } else content = tiles.length
+          ? <Client key="treemap" module="./rows.tsx" props={{ rows: draw(tiles, cols, peekRows, look, sized), active: '', ...rowColors, pointer } satisfies RowsProps} />
           : <Text color={theme.muted}>{scan.done ? 'empty' : 'sizing…'}</Text>
       } else if (!target) content = <Text color={theme.muted}>no file selected</Text>
       else if (pic) {

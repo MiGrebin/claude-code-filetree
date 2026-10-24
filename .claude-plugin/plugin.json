@@ -156,6 +156,18 @@
         "top"
       ]
     },
+    "treemap": {
+      "type": "string",
+      "title": "Treemap",
+      "description": "What the split preview shows on a folder. auto: a pixel-accurate treemap through the kitty graphics protocol in Ghostty and kitty, outside tmux and herdr, and the cell treemap everywhere else. image: try the pixel treemap in any terminal, falling back to cells where it cannot show, as inside tmux. cells: always the cell treemap. off: no treemap and no disk usage scans.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "image",
+        "cells",
+        "off"
+      ]
+    },
     "palette": {
       "type": "string",
       "title": "Palette",

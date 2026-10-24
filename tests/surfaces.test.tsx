@@ -2086,6 +2086,56 @@ test('treemap: a folder under the cursor maps its children by du size, a click s
   expect(JSON.stringify(await ui.drawn())).not.toContain('"key":"treemap"')
 })
 
+function find(tree: any, type: string, key: string): any {
+  if (!tree || typeof tree !== 'object') return undefined
+  if (tree.type === type && tree.props?.key === key) return tree.props
+  for (const c of [tree.children ?? []].flat()) {
+    const hit = find(c, type, key)
+    if (hit) return hit
+  }
+}
+
+test('treemap image: in Ghostty the map is one PNG Image with a click zone over it, and a click selects the box and repaints', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k', TERM_PROGRAM: 'ghostty' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['src', 'dir'], ['big.bin', 'file']], [`${root}/src`]: [['x.ts', 'file']] },
+    du: { [root]: `5120\t${root}/src/x.ts\n5120\t${root}/src\n3072\t${root}/big.bin\n8196\t${root}\n` },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  const image = find(await ui.drawn(), 'Image', 'treemap-image')
+  expect(image).toBeDefined()
+  const bytes = Uint8Array.fromBase64(image.source.png)
+  expect([...bytes.slice(1, 4)].map(c => String.fromCharCode(c)).join('')).toBe('PNG')
+  const zone = find(await ui.drawn(), 'Client', 'treemap').props
+  expect(zone.boxes.map((b: any) => b[0])).toContain(`${root}/src`)
+  await ui.post({ tab: `${root}/big.bin` }, { in: 'treemap' })
+  await clock.settle()
+  const after = await ui.drawn()
+  expect(JSON.stringify(after)).toContain('big.bin 3.0 M')
+  expect(find(after, 'Image', 'treemap-image').source.png).not.toBe(image.source.png)
+})
+
+test('treemap off: a folder under the cursor shows no map and runs no du', { timeoutMs: 20_000, options: { treemap: 'off' } }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, { os: 'linux', env: { HOME: '/home/k', TERM_PROGRAM: 'ghostty' }, cwd: root, top: '', status: '', numstat: '', dirs: { [root]: [['src', 'dir']], [`${root}/src`]: [] } }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  expect(JSON.stringify(await ui.drawn())).not.toContain('treemap')
+  expect(ran.some(c => c[0] === 'du')).toBe(false)
+})
+
 const HERDR_TAB = '{"id":"cli:tab:create","result":{"root_pane":{"pane_id":"w1:p40"},"tab":{"tab_id":"w1:t9"},"type":"tab_created"}}'
 const HERDR_WORKSPACE = '{"id":"cli:workspace:create","result":{"root_pane":{"pane_id":"w2:p1"},"tab":{"tab_id":"w2:t1"},"workspace":{"workspace_id":"w2"},"type":"workspace_created"}}'
 
