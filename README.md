@@ -59,6 +59,7 @@ Install fails with `Unrecognized key: "options"`? Your Claude Code is older than
   <img src="media/filetree-ask.gif" alt="Selecting config.yaml in the tree and asking Claude what it changed there" width="800">
 
 - File and folder sizes: the `Σ` header button swaps the date column for sizes; folders show their disk usage (`du`, or a summed listing on Windows), worked out in the background for the rows on screen and refreshed after Claude writes
+- Changes made outside Claude, in a shell or another app, show within a fraction of a second on Linux: the root and every open folder are watched with `inotifywait` (from inotify-tools) when it is on PATH. Elsewhere they show on the next click or refresh
 - Double-click a file to open it in its default app
 - On macOS, Space on a file shows it in Quick Look
 - Click to select, arrow keys or `j`/`k`/`h`/`l` to move through the tree
