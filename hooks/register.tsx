@@ -112,6 +112,7 @@ let nextJob: PictureJob | null = null
 let current: { job: PictureJob; stop: () => void } | null = null
 const docPages = new Map<string, number>()
 const docCounts = new Map<string, number>()
+let docReading = ''
 const pictures = new Map<string, { sig: string; picture: Picture; retried?: boolean }>()
 let follow = true
 let followClaude = true
@@ -1123,18 +1124,23 @@ async function loadPreview($: EngineInterface, path: string): Promise<void> {
   previewed = await readPreview($, path)
 }
 
+function unlessAborted(err: unknown): null {
+  if (/aborted/.test(String((err as Error)?.message ?? err))) throw err
+  return null
+}
+
 async function docText($: EngineInterface, path: string, page: number): Promise<string> {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase()
   const argv = ext === 'pdf' ? ['timeout', '10', 'pdftotext', '-f', String(page), '-l', String(page), '-layout', '--', path, '-'] : ext === 'docx' || ext === 'odt' || ext === 'rtf' ? ['timeout', '10', 'pandoc', '-t', 'gfm', '--wrap=none', '--', path] : []
   if (!argv.length) return ''
   if (ext === 'pdf' && !docCounts.has(path)) {
-    const info = await $.process.run(['timeout', '10', 'pdfinfo', '--', path], { timeoutMs: 15_000 }).catch(() => null)
+    const info = await $.process.run(['timeout', '10', 'pdfinfo', '--', path], { timeoutMs: 15_000 }).catch(unlessAborted)
     const all = `${info?.stdout ?? ''}${info?.stderr ?? ''}`
     if (/Incorrect password/.test(all)) return '\0encrypted'
     const pages = Number(/^Pages:\s*(\d+)/m.exec(all)?.[1] ?? 0)
     if (pages) docCounts.set(path, pages)
   }
-  const run = await $.process.run(argv, { timeoutMs: 15_000 }).catch(() => null)
+  const run = await $.process.run(argv, { timeoutMs: 15_000 }).catch(unlessAborted)
   return run?.exitCode === 0 ? run.stdout.replace(/\f/g, '\n').trimEnd() : ''
 }
 
@@ -1161,6 +1167,7 @@ async function readPreview($: EngineInterface, path: string, page = 1): Promise<
       }
     }
   } catch (err) {
+    unlessAborted(err)
     note = `could not read: ${String((err as Error)?.message ?? err).split('\n')[0]}`
   }
   const total = text.length
@@ -2315,9 +2322,10 @@ export const register: Register = (on, options) => {
       const name = shown ? (shown === t.root ? shown.split('/').pop() || shown : inside(t.root, shown) ? relative(t.root, shown) : shortPath(shown)) : ''
       const docKind = target ? pictureKind(target) : ''
       const isDoc = docKind === 'pdf' || docKind === 'office'
+      const docPixels = Boolean(Image) && !imageDenied && !inTmux && !inHerdr
       const page = isDoc ? (docPages.get(target) ?? 1) : 0
       const px = Math.round(Math.max(1, e.props.bodyColumns - 1) * (cellPx?.cw ?? 10))
-      const raw = target && (!isDoc || (Image && !imageDenied)) ? await picture($, target, page, px) : null
+      const raw = target && (!isDoc || docPixels) ? await picture($, target, page, px) : null
       const pic = isDoc && raw && raw.state !== 'ready' && !(raw.state === 'failed' && raw.note === 'encrypted') ? null : raw
       if (isDoc && raw?.state === 'ready' && raw.pages) {
         docCounts.set(target, raw.pages)
@@ -2431,10 +2439,24 @@ export const register: Register = (on, options) => {
           content = <Image key="peek-image" source={{ file: pic.file, format: 'png', generation: pic.generation }} columns={fit.columns} rows={fit.rows} alt={name} />
         } else content = <Text color={theme.muted}>{pic.state === 'pending' ? 'decoding…' : pic.state === 'failed' ? pic.note : 'images show in the terminal'}</Text>
       } else {
-        if (peeked?.path !== target || (docKind === 'pdf' && peeked.page !== page)) {
-          peeked = await readPreview($, target, page)
-          if (docKind === 'pdf') peekTop = start = 0
-        }
+        if (isDoc && (peeked?.path !== target || (docKind === 'pdf' && peeked.page !== page))) {
+          const want = `${target}\0${page}`
+          if (docReading !== want) {
+            docReading = want
+            $.clock.after(0, () => void readPreview($, target, page).then(p => {
+              if (docReading !== want) return
+              docReading = ''
+              if (peekPath === target) {
+                peeked = p
+                peekTop = 0
+              }
+              void $.ui.invalidate('ui.render')
+            }, () => {
+              if (docReading === want) docReading = ''
+            }))
+          }
+          if (peeked?.path !== target) peeked = { path: target, text: '', note: 'reading…', page }
+        } else if (peeked?.path !== target) peeked = await readPreview($, target)
         const lines = peeked.text.split('\n')
         const last = Math.max(0, lines.length - peekRows)
         start = Math.min(start, last)
