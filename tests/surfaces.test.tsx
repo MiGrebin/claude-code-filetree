@@ -1700,7 +1700,7 @@ for (const hints of ['on', 'off'] as const) {
     await clock.settle()
     const drawn = (await ui.drawn()) as any
     expect(JSON.stringify(drawn).includes('git init')).toBe(hints === 'on')
-    expect(drawn.children.find((c: any) => c.type === 'Client').props.props.rows.length).toBe(hints === 'on' ? 15 : 16)
+    expect(drawn.children.find((c: any) => c.type === 'Client').props.props.rows.length).toBe(hints === 'on' ? 14 : 15)
     await ui.unmount()
   })
 }

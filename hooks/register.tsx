@@ -2109,12 +2109,12 @@ export const register: Register = (on, options) => {
     const rows = visibleRows(t)
     const body = e.props.scroll?.bodyRows ?? 40
     const footer = t.nodes.find(n => n.id === t.cursor)?.id ?? (t.selected || '')
-    const chrome = 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown ? 1 : 0)
+    const chrome = 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
     const spare = body - chrome - 5
     const splitRows = t.split && !nativeScroll && spare >= 6 && (treemapSetting !== 'off' || Boolean(peekTarget(t))) ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
     splitShown = splitRows > 0
     if (!splitShown) overPeek = false
-    const fixed = splitRows + 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown ? 1 : 0)
+    const fixed = splitRows + 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
     const room = nativeScroll ? Math.max(1, rows.length) : Math.max(5, (e.props.scroll?.bodyRows ?? 40) - fixed)
     const isLit = (id: string) => bright.has(id) || dimmed.has(id)
     const focus = followClaude && t.flashOn ? ([...t.flash].reverse().find(id => id !== BRANCH_ROW) ?? t.cursor) : t.cursor
@@ -2505,7 +2505,7 @@ export const register: Register = (on, options) => {
     ]
     const picked = new Set<string>()
     if (shortcutsShown) {
-      let room = width - (footerName ? 10 + Math.min(footerName.length, 6) : 0) - (latest ? 6 + latest.label.length : 0)
+      let room = width - (footerName ? 12 + Math.min(footerName.length, 6) : 0) - (latest ? 6 + latest.label.length : 0)
       for (const key of ['?', 'jkhl', '[ ]', 'd', 'o', 's', 'p', 'y']) {
         const k = allKeys.find(x => x.key === key)
         if (!k) continue
@@ -2560,18 +2560,10 @@ export const register: Register = (on, options) => {
         />
         <Box flexGrow={1} />
         {splitAt === 'bottom' ? split : null}
-        {(footer || latest || shortcutsShown) && (
+        {(footer || latest || shortcutsShown || shortcutsSetting === 'auto') && (
           <Box flexDirection="row" height={1} overflow="hidden">
-            {footerName ? <Box flexShrink={0}><Text dimColor={!light} color={light ? theme.muted : undefined}>selected: </Text></Box> : null}
-            {footerName ? (
-              <Box flexShrink={1}>
-                <Text dimColor={!light} color={light ? theme.muted : undefined} wrap="truncate-start">{footerName}</Text>
-              </Box>
-            ) : null}
-            <Box flexGrow={1} />
-            {latest && chip(latest)}
             {keys.length ? (
-              <Box flexDirection="row" flexShrink={0} gap={2} marginLeft={2}>
+              <Box flexDirection="row" flexShrink={0} gap={2}>
                 {keys.map(k => k.key === 'jkhl'
                   ? <Text key="nav-move" dimColor><Text color={theme.accent}>j k h l</Text>: move</Text>
                   : k.key === '[ ]'
@@ -2579,6 +2571,18 @@ export const register: Register = (on, options) => {
                   : k.key === '?'
                   ? <Button key="nav-help" plain dimColor label={`?: ${k.label}`} onPress={() => { toggleShortcuts($); park() }} />
                   : <Button key={`nav-${k.key}`} plain dimColor autoFocus={k.key === 'o' && shortcutsSetting === 'always' ? true : undefined} hotkey={k.key} label={k.label} onPress={k.press} />)}
+              </Box>
+            ) : shortcutsSetting === 'auto' ? (
+              <Box flexShrink={0}>
+                <Button key="nav-help" plain dimColor label="?: shortcuts" onPress={() => { toggleShortcuts($); park() }} />
+              </Box>
+            ) : null}
+            <Box flexGrow={1} />
+            {latest && chip(latest)}
+            {footerName ? <Box flexShrink={0} marginLeft={2}><Text dimColor={!light} color={light ? theme.muted : undefined}>selected: </Text></Box> : null}
+            {footerName ? (
+              <Box flexShrink={1}>
+                <Text dimColor={!light} color={light ? theme.muted : undefined} wrap="truncate-start">{footerName}</Text>
               </Box>
             ) : null}
           </Box>
