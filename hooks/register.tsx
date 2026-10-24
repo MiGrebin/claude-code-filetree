@@ -1374,7 +1374,7 @@ function usageOf($: EngineInterface, dir: string, loc: boolean): Scan {
   scans.delete(key)
   scans.set(key, scan)
   for (const [old, s] of scans) if (scans.size > SCAN_KEEP && s.done) scans.delete(old)
-  void runScan($, scan, Boolean(known))
+  $.clock.after(0, () => void runScan($, scan, Boolean(known)))
   return scan
 }
 
@@ -1431,8 +1431,14 @@ async function runScan($: EngineInterface, scan: Scan, seeded: boolean): Promise
       out = got.items
       total = got.total ?? 0
     }
-  } catch {
+  } catch (err) {
     if (scan.stopped) return
+    if (/aborted/.test(String((err as Error)?.message ?? err))) {
+      const key = `${scan.loc ? 'loc:' : ''}${scan.dir}`
+      if (scans.get(key) === scan) scans.delete(key)
+      void $.ui.invalidate('ui.render')
+      return
+    }
   }
   scan.items = out
   scan.total = total || out.reduce((a, u) => a + u.bytes, 0)

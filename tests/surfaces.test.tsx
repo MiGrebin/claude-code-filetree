@@ -23,6 +23,7 @@ type World = {
   du?: Record<string, string>
   loc?: Record<string, string>
   duDelays?: number[]
+  abortDu?: string[]
   watch?: { after: number; change: () => string }
   links?: string[]
   files?: Record<string, string>
@@ -130,6 +131,10 @@ function world(on: any, w: World, ran: Ran) {
   on('process.spawn', async function* (_$: any, e: any) {
     const argv: string[] = [...e.argv]
     ran.push(argv)
+    if (argv[0] === 'du' && w.abortDu?.includes(argv.at(-1) ?? '')) {
+      w.abortDu = w.abortDu.filter(d => d !== argv.at(-1))
+      return { deny: 'aborted' }
+    }
     const out = argv[0] === 'du' ? (w.du?.[argv.at(-1) ?? ''] ?? '') : argv[0] === 'find' && argv.includes('grep') ? (w.loc?.[argv[1] ?? ''] ?? '') : ''
     if (out) yield { stream: 'stdout', text: out }
     if (argv[0] === 'sh' && w.poster) yield { stream: 'stdout', text: w.poster(argv) }
@@ -1790,6 +1795,32 @@ test('the root row has a folder glyph, k from the first row selects it, the spli
   await ui.press({ key: 'root' })
   await clock.settle()
   expect(footer(await ui.drawn())).toContain(`"active":"${root}"`)
+  await ui.unmount()
+})
+
+test('the root row maps the whole root in a fresh session', async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['src', 'dir'], ['a.ts', 'file']], [`${root}/src`]: [['x.ts', 'file']] },
+    files: { [`${root}/a.ts`]: 'export const a = 1\n' },
+    abortDu: [root],
+    du: { [root]: `5120\t${root}/src/x.ts\n5120\t${root}/src\n2048\t${root}/a.ts\n7168\t${root}\n`, [`${root}/src`]: `5120\t${root}/src/x.ts\n5120\t${root}/src\n` },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await ui.post({ press: `${root}/a.ts` }, { in: 'rows' })
+  await clock.settle()
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  await ui.press({ key: 'root' })
+  await clock.settle()
+  const text = mapOf(await ui.drawn())?.rows.map((r: any) => r.left.map((x: any) => x.t).join('')).join('\n') ?? ''
+  expect(text).toContain('a.ts')
+  expect(JSON.stringify(await ui.drawn())).not.toContain('"empty"')
   await ui.unmount()
 })
 
