@@ -1,12 +1,12 @@
 import { LIGHT_TONES, TONES } from '../hooks/git'
-import { GIT_COLOR, LIGHT_GIT_COLOR } from '../hooks/icons'
-import { ADD_COLOR, DEL_COLOR, LIGHT_ADD_COLOR, LIGHT_DEL_COLOR, LIGHT_HOVER } from '../hooks/palette'
-import { DEFAULT_THEME, LIGHT_THEME } from '../hooks/tree'
+import { GIT_COLOR } from '../hooks/icons'
+import { ADD_COLOR, DEL_COLOR } from '../hooks/palette'
+import { DEFAULT_THEME } from '../hooks/tree'
 
 type Check = { name: string; color: string; min: number }
 
 const DARK_BACKGROUNDS = { black: '#000000', 'vscode dark': '#1e1e1e', 'one dark': '#282c34' }
-const LIGHT_BACKGROUNDS = { white: '#ffffff', 'near white': '#fafafa', hover: LIGHT_HOVER, selection: LIGHT_THEME.selection }
+const LIGHT_BACKGROUNDS = { white: '#ffffff', 'near white': '#fafafa' }
 const TEXT = 3
 const DIM = 2
 const AAA = 7
@@ -23,15 +23,18 @@ export function contrast(a: string, b: string): number {
   return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05)
 }
 
-function checks(theme: typeof DEFAULT_THEME, tones: typeof TONES, git: Record<string, string>, add: string, del: string, text: number, dim: number): Check[] {
-  const out: Check[] = [
-    { name: 'accent', color: theme.accent, min: text },
-    { name: 'muted', color: theme.muted, min: text },
-    { name: 'urgent', color: theme.urgent, min: text },
-    { name: 'add', color: add, min: text },
-    { name: 'del', color: del, min: text },
-    ...Object.entries(git).map(([k, color]) => ({ name: `git ${k}`, color, min: text })),
-  ]
+const PALETTE = [
+  ['accent', DEFAULT_THEME.accent],
+  ['muted', DEFAULT_THEME.muted],
+  ['urgent', DEFAULT_THEME.urgent],
+  ['selection', DEFAULT_THEME.selection],
+  ['add', ADD_COLOR],
+  ['del', DEL_COLOR],
+  ...Object.entries(GIT_COLOR).map(([k, color]) => [`git ${k}`, color]),
+]
+
+function checks(tones: typeof TONES, text: number, dim: number): Check[] {
+  const out: Check[] = []
   for (const [tone, t] of Object.entries(tones)) {
     out.push({ name: `${tone} solid`, color: t.solid, min: text })
     t.bright.forEach((color, i) => out.push({ name: `${tone} bright ${i}`, color, min: text }))
@@ -41,11 +44,15 @@ function checks(theme: typeof DEFAULT_THEME, tones: typeof TONES, git: Record<st
 }
 
 const suites = [
-  { name: 'dark', backgrounds: DARK_BACKGROUNDS, checks: checks(DEFAULT_THEME, TONES, GIT_COLOR, ADD_COLOR, DEL_COLOR, TEXT, DIM) },
-  { name: 'light', backgrounds: LIGHT_BACKGROUNDS, checks: checks(LIGHT_THEME, LIGHT_TONES, LIGHT_GIT_COLOR, LIGHT_ADD_COLOR, LIGHT_DEL_COLOR, AAA, AAA) },
+  { name: 'dark', backgrounds: DARK_BACKGROUNDS, checks: checks(TONES, TEXT, DIM) },
+  { name: 'light', backgrounds: LIGHT_BACKGROUNDS, checks: checks(LIGHT_TONES, AAA, AAA) },
 ]
 
 let failed = 0
+const fixed = PALETTE.filter(([, color]) => !/^ansi256\(\d+\)$/.test(color ?? ''))
+for (const [name] of fixed) console.log(`FAIL ${name} is a fixed color; defaults must be terminal palette indices`)
+failed += fixed.length
+console.log(`palette indices: ${PALETTE.map(([n, c]) => `${n}=${c}`).join(', ')} (contrast follows the terminal theme)`)
 for (const suite of suites) {
   console.log(`\n${suite.name} palette`)
   for (const c of suite.checks) {
