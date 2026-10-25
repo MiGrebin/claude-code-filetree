@@ -11,7 +11,7 @@ export type RowsProps = {
   spinner?: string[]
   pointer?: boolean
   bar?: { pos: number; size: number; thumb: string; track: string }
-  preview?: { text: string; path: string; startLine: number; markdown: boolean; segments?: { title: string; source: string }[]; titleColor?: string }
+  preview?: { text: string; path: string; startLine: number; markdown: boolean; segments?: { title: string; source: string }[]; titleColor?: string; rows?: number }
 }
 type Local = { hover: number; phase: number; drag: boolean; ref: { stop?: () => void; unpoint?: () => void } }
 
@@ -49,7 +49,8 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
     state.ref.unpoint = undefined
   } else state.ref.unpoint = surface.onPointer(e => {
     const cur = surface.state ?? state
-    const span = Math.max(1, props.rows.length - 1)
+    if (props.preview && (e.type === 'enter' || e.type === 'leave')) surface.post({ over: e.type === 'enter' })
+    const span = Math.max(1, (props.preview?.rows ?? props.rows.length) - 1)
     const onBar = Boolean(props.bar) && e.x >= surface.columns - 1
     if (props.bar && (cur.drag || (onBar && e.type === 'down' && (e.button ?? 'left') === 'left'))) {
       if (e.type === 'up' || e.type === 'leave') {
@@ -101,7 +102,26 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
         </Column>
       )
     }
-    return p.markdown ? <Markdown text={p.text} /> : <Code source={p.text} path={p.path} startLine={p.startLine} wrap="truncate-end" />
+    const body = p.markdown ? <Markdown text={p.text} /> : <Code source={p.text} path={p.path} startLine={p.startLine} wrap="truncate-end" />
+    if (!p.rows) return body
+    const bar = props.bar
+    return (
+      <Column flexDirection="row" height={p.rows} overflow="hidden">
+        <Column flexGrow={1} flexShrink={1} flexDirection="column" overflow="hidden">
+          <Column flexShrink={0} flexDirection="column">
+            {body}
+          </Column>
+        </Column>
+        {bar ? (
+          <Column flexDirection="column" flexShrink={0}>
+            {Array.from({ length: p.rows }, (_, i) => {
+              const on = i >= bar.pos && i < bar.pos + bar.size
+              return <Title color={(on ? bar.thumb : bar.track) || undefined} dimColor={!on && !bar.track}>{on ? '┃' : '│'}</Title>
+            })}
+          </Column>
+        ) : null}
+      </Column>
+    )
   }
   const frames = props.spinner?.length ? props.spinner : FRAMES
   const draw = (s: Seg) => {
@@ -115,7 +135,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
     const palette = s.sh ? (s.dim ? props.tones[s.sh]?.dim : props.tones[s.sh]?.bright) : undefined
     if (!palette) {
       return (
-        <Text color={s.c} backgroundColor={s.bg} bold={s.b} strikethrough={s.s} italic={s.i}>
+        <Text color={s.c || undefined} dimColor={s.c === ''} backgroundColor={s.bg} bold={s.b} strikethrough={s.s} italic={s.i}>
           {s.t}
         </Text>
       )
@@ -141,7 +161,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
       flexDirection="row"
       height={1}
       overflow="hidden"
-      backgroundColor={r.id && r.id === props.active ? props.activeBg : r.id && i === state.hover ? props.hoverBg : undefined}
+      backgroundColor={r.id && r.id === props.active ? props.activeBg : r.id && i === state.hover ? props.hoverBg || undefined : undefined}
     >
       <Box flexShrink={1} overflow="hidden">
         {r.left.map(draw)}
@@ -149,7 +169,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
       <Box flexGrow={1} />
       {r.right.map(draw)}
       {props.bar && (
-        <Text color={i >= props.bar.pos && i < props.bar.pos + props.bar.size ? props.bar.thumb : props.bar.track}>
+        <Text color={(i >= props.bar.pos && i < props.bar.pos + props.bar.size ? props.bar.thumb : props.bar.track) || undefined} dimColor={!props.bar.track && !(i >= props.bar.pos && i < props.bar.pos + props.bar.size)}>
           {i >= props.bar.pos && i < props.bar.pos + props.bar.size ? '┃' : '│'}
         </Text>
       )}

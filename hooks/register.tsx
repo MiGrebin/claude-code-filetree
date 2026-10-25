@@ -1,13 +1,19 @@
-import { type BuiltinToolResults, type EngineInterface, type Register, type Timer, update } from 'claude-code'
-import { herdrError, herdrOpenCommand, herdrPane, isBinaryPath, LINUX_LAUNCH, openCommand, openWithCommand, tmuxOpenCommand, words } from './open'
+import { type BuiltinToolResults, type EngineInterface, type Register, type RenderElement, type Timer, update } from 'claude-code'
+import { herdrError, herdrOpenCommand, herdrPane, isBinaryPath, LINUX_LAUNCH, openCommand, openWithCommand, type Target, terminalTarget, tmuxCommand, tmuxOpenCommand, words } from './open'
 import type { ButtonProps } from './button'
+import { CACHE_KEEP, cacheName, CLEAN, coderFor, EXIT_FAILED, EXIT_LOCKED, EXIT_MISSING, fitCells, PNG_DIRECT_BYTES, PNG_DIRECT_PIXELS, pictureKind, pngSize, POLICY, POSTER } from './peek'
 
 import type { Activity, FileNode, FileTree, Theme } from '../types'
 import { BRANCH_ICON, chainOf, type GitAction, gitActions, LIGHT_TONES, readOnly, readTargets, resolve, TONES } from './git'
 import type { RowSpec, RowsProps, Seg } from './rows'
 import { type DiffLine, diffWindow, splitPatch } from './diff'
-import { ADD_COLOR, DEL_COLOR, LIGHT_ADD_COLOR, LIGHT_DEL_COLOR, LIGHT_HOVER, type Palette, parsePalette } from './palette'
-import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR, LIGHT_GIT_COLOR } from './icons'
+import { counted, formatLoc, locArgv, locUsage, parseLoc, sumDirs } from './loc'
+import { draw, layout, layoutPixels, parseDu, REST, type Tile, type Usage } from './treemap'
+import { boxLook, fitPixels, inkOn, over, paint, type PixelLook, png, readable, type Rgb, textHeight } from './pixmap'
+import { CELL_PROBE, colorOf, GHOSTTY_ARGS, parseGhostty, type TermColors } from './term'
+import type { ZoneProps } from './zone'
+import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
+import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR } from './icons'
 import {
   age,
   ancestorsOf,
@@ -19,11 +25,9 @@ import {
   inside,
   isAbsolute,
   join,
-  LIGHT_THEME,
   mapper,
   parseGit,
   parseNumstat,
-  parseTheme,
   posix,
   relative,
   dropBelow,
@@ -38,7 +42,6 @@ import {
 } from './tree'
 
 const TREE = { plugin: 'filetree', key: 'tree' } as const
-const THEME = { plugin: 'filetree', key: 'theme' } as const
 const ACTIVITY = { plugin: 'filetree', key: 'activity' } as const
 const PANE = 'filetree'
 const SHIMMER = Object.fromEntries(Object.entries(TONES).map(([k, v]) => [k, { bright: v.bright, dim: v.dim }]))
@@ -48,13 +51,12 @@ const FLASH_MS = 2700
 const RUNNING_MAX_MS = 600_000
 const NO_REPO_DEPTH = 4
 const DOUBLE_MS = 450
+const SHORTCUTS_MS = 10_000
 const FIND_LIMIT = 200
 const ROWS_BUDGET = 80_000
 const READ_REVEAL_LIMIT = 12
 const SEARCH_REVEAL_LIMIT = 60
 const ACTIVITY_TTL_MS = 45_000
-const THEME_FILE = '.local/state/omarchy/current/theme/colors.toml'
-const THEME_POLL_MS = 2000
 const GIT_POLL_MS = 2000
 const FONT_SCRIPT =
   'if command -v fc-list >/dev/null 2>&1; then f=$(fc-list ":charset=$1" file | grep -vi lastresort | head -n1 | cut -d: -f1); fi; ' +
@@ -72,27 +74,46 @@ const SIZE_WALK_LIMIT = 50_000
 const AGE_TICK_MS = 60_000
 
 let blink: Timer | null = null
-let themePoll: Timer | null = null
+let cached: FileTree | null = null
+let snapshot: Timer | null = null
 let gitPoll: Timer | null = null
 let gitStamp: string | null = null
 let gitDirOf = { root: '', dir: '' }
 let ageTick: Timer | null = null
-let themeMtime: number | null = null
 let lightTerminal = false
 let generation = 0
 let lastPress = { key: '', at: 0 }
 let noNerd = false
 let glyphSetting = 'auto'
+const WORDS: Record<string, string> = { up: 'up', cwd: 'cwd', refresh: 'sync', hidden: 'dots', size: 'size', collapse: 'fold', split: 'split', unselect: 'clear' }
 let openWithSetting = ''
 let binariesInDefaultApp = false
 let editWithSetting = ''
 let diffWithSetting = ''
+let targetSetting: Target = 'auto'
 let palette: Palette = parsePalette('')
 let inTmux = false
 let inHerdr = false
 let previewLine = 1
-let previewed: { path: string; text: string; note: string; diff?: DiffLine[] } | null = null
+let previewed: Preview | null = null
 let previewRows = 20
+let splitAt: 'bottom' | 'top' = 'bottom'
+let peeked: Preview | null = null
+let peekPath = ''
+let peekRows = 8
+let peekTop = 0
+let overPeek = false
+let pictureBase = ''
+let pictureSession = ''
+let sessionDir = ''
+let splitShown = false
+let converting = false
+let nextJob: PictureJob | null = null
+let current: { job: PictureJob; stop: () => void } | null = null
+const docPages = new Map<string, number>()
+const docCounts = new Map<string, number>()
+let docReading = ''
+const pictures = new Map<string, { sig: string; picture: Picture; retried?: boolean }>()
 let follow = true
 let followClaude = true
 let scanning: Promise<void> | null = null
@@ -102,13 +123,18 @@ let gitNext: Promise<void> | null = null
 let queuedReads: string[] = []
 let showReads = true
 let showWrites = true
-let searchIndex: { root: string; paths: Promise<string[]> } | null = null
+let searchIndex: { root: string; paths: Promise<Indexed> } | null = null
 let activityId = 0
 let pointer = true
 let hovered = ''
 let view = { from: 0, max: 0 }
 let nativeScroll = false
 let lastSync = 0
+let watcher: { key: string; stop: () => void } | null = null
+let watchMissing = false
+let watchTimer: Timer | null = null
+const watchQueue = new Set<string>()
+const WATCH_MS = 150
 let noDock = false
 let home = ''
 let platform: Promise<'linux' | 'darwin' | 'win32'> | null = null
@@ -116,19 +142,48 @@ let dirty: { root: string; files: Record<string, Change> } = { root: '', files: 
 let markId = 0
 let listSeq = 0
 let lastRoot = ''
-let sizeDefault = false
+let columnDefault: Column = 'date'
 let showAge = false
 let showHints = true
 let ignoreNames: string[] = []
 let searchGap = true
-let showShortcuts = true
+let shortcutsSetting: 'auto' | 'always' | 'off' = 'auto'
+let shortcutsShown = false
+let shortcutsTimer = 0
+let treemapSetting: 'auto' | 'image' | 'cells' | 'off' = 'auto'
+let kittyTerm = false
+let imageDenied = false
+let imageChecked = false
+let cellPx: { cw: number; ch: number } | null = null
+let termColors: TermColors = { palette: {} }
+let mapImage: { key: string; png: string } | null = null
 let sizeEpoch = 0
 let sizeActive = 0
 let sizeQueue: string[] = []
+type Column = FileTree['column']
+const locCache = new Map<string, number>()
+const locListed = new Set<string>()
+const locBusy = new Set<string>()
+let locQueue: [string, boolean][] = []
+let locActive = 0
 const sizing = new Set<string>()
 const listLatest = new Map<string, number>()
 const unreadable = new Set<string>()
 const background = new Map<string, Background>()
+
+type Preview = { path: string; text: string; note: string; diff?: DiffLine[]; page?: number }
+type Scan = { dir: string; loc: boolean; items: Usage[]; total: number; done: boolean; stale: boolean; stopped: boolean; stop: () => void }
+const scans = new Map<string, Scan>()
+let mapLock: { anchor: string; pick: string; cursor: string } | null = null
+let mapAnchor = ''
+let mapPick = ''
+const SCAN_KEEP = 24
+const SCAN_DRAW_MS = 100
+const STALE_MS = 1500
+const staleQueue = new Set<string>()
+let staleTimer: Timer | null = null
+type PictureJob = { path: string; key: string; kind: 'png' | 'image' | 'video' | 'pdf' | 'office'; sig: string; mtime: number; size: number; page: number; px: number; pdf: string }
+type Picture = { state: 'pending' } | { state: 'ready'; file: string; generation: number; width: number; height: number; pages?: number } | { state: 'failed'; note: string; missing?: boolean }
 
 function osName($: EngineInterface): Promise<'linux' | 'darwin' | 'win32'> {
   platform ??= (async () => {
@@ -165,12 +220,18 @@ async function readThemeSetting($: EngineInterface): Promise<void> {
   void $.ui.invalidate('ui.render')
 }
 
-async function get($: EngineInterface): Promise<FileTree> {
-  return { ...emptyTree(''), ...(await $.state.get(TREE)).value }
+async function get(_$: EngineInterface): Promise<FileTree> {
+  cached ??= emptyTree('')
+  return cached
 }
 
 async function put($: EngineInterface, fn: (t: FileTree) => FileTree): Promise<void> {
-  await update($, TREE, cur => fn({ ...emptyTree(''), ...cur }))
+  cached = fn(cached ?? emptyTree(''))
+  snapshot ??= $.clock.after(1_000, () => {
+    snapshot = null
+    if (cached) void $.state.set(TREE, cached)
+  })
+  await $.ui.invalidate('ui.render')
 }
 
 function patch($: EngineInterface, fn: (t: FileTree) => Partial<FileTree>) {
@@ -224,8 +285,56 @@ async function loadDirs($: EngineInterface, dirs: string[]): Promise<Map<string,
     listLatest.delete(dir)
     if (kids) listed.set(dir, kids)
   }
-  await patch($, t => (t.root === root ? { nodes: replaceChildren(t.nodes, listed) } : {}))
+  await patch($, t => {
+    if (t.root !== root) return {}
+    const nodes = replaceChildren(t.nodes, listed)
+    const up = dirname(t.cursor)
+    const lost = t.cursor && listed.has(up) && !nodes.some(n => n.id === t.cursor)
+    return lost ? { nodes, cursor: up === root ? '' : up } : { nodes }
+  })
+  void watchTree($)
   return listed
+}
+
+async function watchTree($: EngineInterface): Promise<void> {
+  const t = await get($)
+  const dirs = t.root ? [t.root, ...openDirs(t)] : []
+  const key = dirs.join('\0')
+  if (watchMissing || watcher?.key === key) return
+  watcher?.stop()
+  watcher = null
+  if (!dirs.length || (await osName($)) !== 'linux') return
+  const stream = $.process.spawn({ argv: ['inotifywait', '-mq', '-e', 'create,delete,moved_to,moved_from,close_write', '--format', '%w%f', '--', ...dirs] })
+  const own = { key, stop: () => void stream.return(undefined as never).catch(() => undefined) }
+  watcher = own
+  let rest = ''
+  try {
+    for await (const chunk of stream) {
+      if (watcher !== own) return
+      if (chunk.stream !== 'stdout') continue
+      const lines = (rest + chunk.text).split('\n')
+      rest = lines.pop() ?? ''
+      for (const line of lines) if (line) watchQueue.add(posix(line))
+      if (watchQueue.size && !watchTimer) watchTimer = $.clock.after(WATCH_MS, () => void watched($))
+    }
+  } catch {
+    if (watcher === own) watchMissing = true
+  }
+}
+
+async function watched($: EngineInterface): Promise<void> {
+  watchTimer = null
+  const paths = [...watchQueue]
+  watchQueue.clear()
+  dropPreviews(paths)
+  const t = await get($)
+  const open = new Set([t.root, ...openDirs(t)])
+  const dirs = [...new Set(paths.map(p => dirname(p)).filter(d => open.has(d)))]
+  if (!dirs.length) return
+  markStale($, paths)
+  await staleSizes($, paths)
+  await loadDirs($, dirs)
+  if (t.top) await refreshGit($)
 }
 
 async function git($: EngineInterface, cwd: string, args: string[], timeoutMs = 20_000, stdin?: string) {
@@ -253,11 +362,13 @@ async function readGit($: EngineInterface): Promise<void> {
   if (!t.root || !t.top) return
   const root = t.root
   try {
-    const status = await git($, root, ['status', '--porcelain=v1', '-b', '-z', '--ignored=traditional', '--untracked-files=normal', '--', '.'])
+    const [status, head] = await Promise.all([
+      git($, root, ['status', '--porcelain=v1', '-b', '-z', '--ignored=traditional', '--untracked-files=normal', '--', '.']),
+      git($, root, ['diff', 'HEAD', '--numstat', '-z', '--', '.']),
+    ])
     if (status.exitCode !== 0) return
     const parsed = parseGit(status.stdout, root, t.prefix)
     const diff: Record<string, [number, number]> = {}
-    const head = await git($, root, ['diff', 'HEAD', '--numstat', '-z', '--', '.'])
     if (head.exitCode === 0) parseNumstat(head.stdout, root, t.prefix, diff)
     const files = { ...parsed.files }
     if (parsed.untrackedDirs.length) {
@@ -298,7 +409,7 @@ function refreshGit($: EngineInterface): Promise<void> {
   return gitNext
 }
 
-async function reset($: EngineInterface, root: string, focus = false): Promise<void> {
+async function reset($: EngineInterface, root: string, focus = false, ready?: Promise<void>): Promise<void> {
   const prev = await get($)
   generation += 1
   blink?.cancel()
@@ -307,12 +418,15 @@ async function reset($: EngineInterface, root: string, focus = false): Promise<v
   searchIndex = null
   sizeEpoch += 1
   sizeQueue = []
-  await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, showSize: prev.root ? prev.showSize : sizeDefault }))
+  await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, column: prev.root ? prev.column : columnDefault, split: prev.split }))
   const title = `Files: ${root.split('/').pop() || root}`
+  const listed = loadDirs($, [root])
+  const repo = detectRepo($)
+  await ready
   if (focus) await $.ui.open({ id: PANE, title, focus: true })
   else if (!noDock) await $.ui.open({ id: PANE, title })
-  await loadDirs($, [root])
-  await detectRepo($)
+  await listed
+  await repo
   await refreshGit($)
 }
 
@@ -448,7 +562,7 @@ function pumpSizes($: EngineInterface): void {
       .then(async bytes => {
         if (epoch === sizeEpoch) return patch($, cur => (inside(cur.root, dir) ? { dirSizes: { ...cur.dirSizes, [dir]: bytes } } : {}))
         const cur = await get($)
-        if (cur.showSize && inside(cur.root, dir) && !(dir in cur.dirSizes) && !sizeQueue.includes(dir)) sizeQueue.push(dir)
+        if (cur.column === 'size' && inside(cur.root, dir) && !(dir in cur.dirSizes) && !sizeQueue.includes(dir)) sizeQueue.push(dir)
       })
       .catch(() => undefined)
       .finally(() => {
@@ -459,6 +573,50 @@ function pumpSizes($: EngineInterface): void {
   }
 }
 
+function takeLoc(files: Map<string, number>, dir: string, deep: boolean): void {
+  for (const [path, n] of files) locCache.set(path, n)
+  if (deep) {
+    for (const [d, n] of sumDirs(files, dir)) {
+      locCache.set(d, n)
+      locListed.add(d)
+    }
+  }
+  locListed.add(dir)
+}
+
+function pumpLoc($: EngineInterface): void {
+  while (locActive < SIZE_JOBS && locQueue.length) {
+    const [dir, deep] = locQueue.shift() ?? ['', false]
+    const epoch = sizeEpoch
+    const key = `${deep ? 'd' : 's'}${dir}`
+    locBusy.add(key)
+    locActive += 1
+    void (async () => {
+      if ((await osName($)) === 'win32') return
+      const t = await get($)
+      const argv = locArgv(dir, pruneArgs(t.root))
+      const run = await $.process.run(deep ? argv : [argv[0] ?? 'find', dir, '-maxdepth', '1', ...argv.slice(2)], { timeoutMs: SIZE_TIMEOUT_MS })
+      if (epoch !== sizeEpoch) return
+      takeLoc(parseLoc(run.stdout), dir, deep)
+      void $.ui.invalidate('ui.render')
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        locBusy.delete(key)
+        locActive -= 1
+        pumpLoc($)
+      })
+  }
+}
+
+function wantLoc($: EngineInterface, dirs: string[], deep: boolean): void {
+  for (const dir of dirs) {
+    if (locBusy.has(`${deep ? 'd' : 's'}${dir}`) || locQueue.some(([d, k]) => d === dir && k === deep)) continue
+    locQueue.push([dir, deep])
+  }
+  pumpLoc($)
+}
+
 function wantSizes($: EngineInterface, dirs: string[]): void {
   for (const dir of dirs) if (!sizing.has(dir) && !sizeQueue.includes(dir)) sizeQueue.push(dir)
   pumpSizes($)
@@ -467,6 +625,19 @@ function wantSizes($: EngineInterface, dirs: string[]): void {
 async function staleSizes($: EngineInterface, paths?: string[]): Promise<void> {
   sizeEpoch += 1
   sizeQueue = []
+  locQueue = []
+  if (!paths) {
+    locCache.clear()
+    locListed.clear()
+  }
+  for (const p of paths ?? []) {
+    locCache.delete(p)
+    locListed.delete(p)
+    for (let d = dirname(p), prev = p; d !== prev; prev = d, d = dirname(d)) {
+      locCache.delete(d)
+      locListed.delete(d)
+    }
+  }
   await patch($, cur => {
     if (!paths) return { dirSizes: {} }
     const keep: Record<string, number> = {}
@@ -671,7 +842,6 @@ async function gitChanged($: EngineInterface): Promise<void> {
 }
 
 async function settleRoot($: EngineInterface): Promise<void> {
-  await loadTheme($)
   const root = follow || !lastRoot ? await cwdOf($) : lastRoot
   const t = await get($)
   if (t.root !== root || t.nodes.length === 0) await reset($, root)
@@ -811,8 +981,15 @@ function scheduleScan($: EngineInterface, job: Job): void {
   })
 }
 
+function dropPreviews(paths: string[]): void {
+  const changed = new Set(paths.map(posix))
+  if (previewed && changed.has(previewed.path)) previewed = null
+  if (peeked && changed.has(peeked.path)) peeked = null
+}
+
 async function touched($: EngineInterface, paths: string[], tone: string, show: boolean): Promise<void> {
-  if (tone !== 'purple' && previewed && paths.map(posix).includes(previewed.path)) previewed = null
+  if (tone !== 'purple') dropPreviews(paths)
+  if (tone !== 'purple') markStale($, paths)
   if (await followCwd($)) return
   const t = await get($)
   if (!t.root) return
@@ -874,13 +1051,15 @@ async function listAll($: EngineInterface, t: FileTree): Promise<string[] | null
   }
 }
 
-function indexPaths($: EngineInterface, t: FileTree): Promise<string[]> {
+type Indexed = { paths: string[]; lower: string[] }
+
+function indexPaths($: EngineInterface, t: FileTree): Promise<Indexed> {
   if (searchIndex?.root !== t.root) {
-    const index: { root: string; paths: Promise<string[]> } = {
+    const index: { root: string; paths: Promise<Indexed> } = {
       root: t.root,
       paths: listAll($, t).then(paths => {
         if (paths === null && searchIndex === index) searchIndex = null
-        return paths ?? []
+        return { paths: paths ?? [], lower: (paths ?? []).map(p => relative(t.root, p).toLowerCase()) }
       }),
     }
     searchIndex = index
@@ -894,7 +1073,9 @@ async function search($: EngineInterface, query: string): Promise<string[]> {
   const q = query.trim().toLowerCase()
   if (!q) return []
   const t = await get($)
-  const hits = (await indexPaths($, t)).filter(p => relative(t.root, p).toLowerCase().includes(q)).slice(0, SEARCH_REVEAL_LIMIT)
+  const index = await indexPaths($, t)
+  const hits: string[] = []
+  for (let i = 0; i < index.lower.length && hits.length < SEARCH_REVEAL_LIMIT; i++) if (index.lower[i]?.includes(q)) hits.push(index.paths[i] ?? '')
   if ((await get($)).query !== query) return []
   await revealPaths($, hits)
   const shown = await get($)
@@ -946,11 +1127,44 @@ function fitSerialized(lines: string[], max: number): string[] {
 }
 
 async function loadPreview($: EngineInterface, path: string): Promise<void> {
+  previewed = await readPreview($, path)
+}
+
+function unlessAborted(err: unknown): null {
+  if (/aborted/.test(String((err as Error)?.message ?? err))) throw err
+  return null
+}
+
+async function docText($: EngineInterface, path: string, page: number): Promise<string> {
+  const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase()
+  const argv = ext === 'pdf' ? ['timeout', '10', 'pdftotext', '-f', String(page), '-l', String(page), '-layout', '--', path, '-'] : ext === 'docx' || ext === 'odt' || ext === 'rtf' ? ['timeout', '10', 'pandoc', '-t', 'gfm', '--wrap=none', '--', path] : []
+  if (!argv.length) return ''
+  if (ext === 'pdf' && !docCounts.has(path)) {
+    const info = await $.process.run(['timeout', '10', 'pdfinfo', '--', path], { timeoutMs: 15_000 }).catch(unlessAborted)
+    const all = `${info?.stdout ?? ''}${info?.stderr ?? ''}`
+    if (/Incorrect password/.test(all)) return '\0encrypted'
+    const pages = Number(/^Pages:\s*(\d+)/m.exec(all)?.[1] ?? 0)
+    if (pages) docCounts.set(path, pages)
+  }
+  const run = await $.process.run(argv, { timeoutMs: 15_000 }).catch(unlessAborted)
+  return run?.exitCode === 0 ? run.stdout.replace(/\f/g, '\n').trimEnd() : ''
+}
+
+async function readPreview($: EngineInterface, path: string, page = 1): Promise<Preview> {
   let text = ''
   let note = ''
   try {
     const stat = await $.fs.stat(path)
-    if (stat.size > 4_000_000) note = `${formatSize(stat.size)}, too large to preview`
+    const kind = pictureKind(path)
+    if (stat.kind !== 'file') note = 'not a regular file'
+    else if (kind === 'pdf' || kind === 'office') {
+      text = await docText($, path, page)
+      if (text === '\0encrypted') {
+        text = ''
+        note = 'encrypted'
+      } else if (!text) note = kind === 'pdf' && docCounts.has(path) ? `no text on page ${page}` : `${path.split('/').pop()}, ${formatSize(stat.size)}`
+    }
+    else if (stat.size > 4_000_000) note = `${formatSize(stat.size)}, too large to preview`
     else {
       text = await $.fs.read(path)
       if (text.slice(0, 8000).includes('\0')) {
@@ -959,15 +1173,16 @@ async function loadPreview($: EngineInterface, path: string): Promise<void> {
       }
     }
   } catch (err) {
+    unlessAborted(err)
     note = `could not read: ${String((err as Error)?.message ?? err).split('\n')[0]}`
   }
   const total = text.length
   let lines = text.slice(0, PREVIEW_CHARS).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').split('\n')
-  if (total > PREVIEW_CHARS && lines.length > 1) lines.pop()
+  if (lines.length > 1 && (total > PREVIEW_CHARS || lines.at(-1) === '')) lines.pop()
   lines = lines.map(l => (l.length > PREVIEW_LINE ? `${l.slice(0, PREVIEW_LINE)}…` : l))
   const fit = fitSerialized(lines, PREVIEW_CHARS)
   if (total > PREVIEW_CHARS || fit.length < lines.length) note = `first ${fit.length.toLocaleString('en')} lines of ${total.toLocaleString('en')} characters`
-  previewed = { path, text: fit.join('\n'), note }
+  return { path, text: fit.join('\n'), note, page }
 }
 
 async function loadDiff($: EngineInterface, path: string, folder: boolean): Promise<boolean> {
@@ -1010,7 +1225,7 @@ async function diffFile($: EngineInterface, path: string): Promise<void> {
   try {
     if (host === 'herdr') return await openInHerdr($, diffWithSetting, path)
     if (host === 'tmux') {
-      const run = await $.process.run(['tmux', 'new-window', '-c', dirname(path), '--', ...words(diffWithSetting), path], { timeoutMs: 10_000 })
+      const run = await $.process.run(tmuxCommand(targetSetting, dirname(path), [...words(diffWithSetting), path]), { timeoutMs: 10_000 })
       if (run.exitCode !== 0) $.ui.toast(`could not diff ${shortPath(path)} with ${diffWithSetting}: ${run.stderr.trim().split('\n')[0] || `exit ${run.exitCode}`}`)
       return
     }
@@ -1026,6 +1241,317 @@ async function diffFile($: EngineInterface, path: string): Promise<void> {
   }
 }
 
+async function pngHeader($: EngineInterface, file: string): Promise<{ width: number; height: number } | null> {
+  const run = await $.process.run(['od', '-An', '-tu1', '-N24', '--', file], { timeoutMs: 5_000 })
+  return run.exitCode === 0 ? pngSize(Uint8Array.from(run.stdout.trim().split(/\s+/).map(Number))) : null
+}
+
+async function makePicture($: EngineInterface, job: PictureJob): Promise<Picture> {
+  try {
+    if ((await osName($)) === 'win32') return { state: 'failed', note: 'image preview needs Linux or macOS' }
+    let file = job.path
+    let size = job.kind === 'png' && job.size <= PNG_DIRECT_BYTES ? await pngHeader($, job.path) : null
+    if (size && (size.width > PNG_DIRECT_PIXELS || size.height > PNG_DIRECT_PIXELS)) size = null
+    let pages = 0
+    if (!size) {
+      const doc = job.kind === 'pdf' || job.kind === 'office'
+      const argv = ['sh', '-c', POSTER, 'sh', job.path, pictureBase, pictureSession, job.sig, doc ? job.kind : job.kind === 'video' ? 'video' : 'image', coderFor(job.path), String(CACHE_KEEP), POLICY, ...(doc ? [String(job.page), String(job.px), job.pdf] : [])]
+      const made = doc ? await spawnRun($, job, argv) : await $.process.run(argv, { timeoutMs: 30_000 })
+      if (!made) return { state: 'failed', note: 'cancelled' }
+      const why = made.stderr.trim().split('\n').filter(Boolean)[0] ?? ''
+      if (made.exitCode === EXIT_MISSING) return { state: 'failed', note: why || 'no decoder on PATH', missing: true }
+      if (made.exitCode === EXIT_LOCKED) return { state: 'failed', note: 'encrypted' }
+      if (made.exitCode === EXIT_FAILED) return { state: 'failed', note: `could not decode${why ? `: ${why}` : ''}` }
+      const [out = '', count = ''] = made.stdout.trim().split('\n')
+      if (made.exitCode !== 0 || !out.startsWith('/')) return { state: 'failed', note: why || `could not decode, exit ${made.exitCode}` }
+      file = out
+      pages = Number(count) || 0
+      sessionDir = dirname(file)
+      size = await pngHeader($, file)
+    }
+    return size ? { state: 'ready', file, generation: Math.floor(job.mtime) + job.page * 7 + job.px, ...size, ...(pages ? { pages } : {}) } : { state: 'failed', note: 'could not read the picture size' }
+  } catch (err) {
+    return { state: 'failed', note: String((err as Error)?.message ?? err).split('\n')[0] ?? 'could not decode' }
+  }
+}
+
+function forget($: EngineInterface, path: string): void {
+  const old = pictures.get(path)
+  pictures.delete(path)
+  if (old?.picture.state === 'ready' && old.picture.file !== path) void $.process.run(['rm', '-f', '--', old.picture.file], { timeoutMs: 5_000 }).catch(() => undefined)
+}
+
+async function spawnRun($: EngineInterface, job: PictureJob, argv: string[]): Promise<{ exitCode: number; stdout: string; stderr: string } | null> {
+  const stream = $.process.spawn({ argv })
+  let stopped = false
+  current = { job, stop: () => { stopped = true; void stream.return(undefined as never).catch(() => undefined) } }
+  let stdout = ''
+  let stderr = ''
+  let exitCode = 1
+  try {
+    for (;;) {
+      const step = await stream.next()
+      if (step.done) {
+        exitCode = step.value?.code ?? 1
+        break
+      }
+      if (step.value.stream === 'stdout') stdout += step.value.text
+      else stderr += step.value.text
+    }
+  } catch {
+    if (!stopped) throw new Error('could not start sh')
+  } finally {
+    current = null
+  }
+  return stopped ? null : { exitCode, stdout, stderr }
+}
+
+async function convert($: EngineInterface, job: PictureJob): Promise<void> {
+  if (converting) {
+    if (nextJob && pictures.get(nextJob.key)?.sig === nextJob.sig) pictures.delete(nextJob.key)
+    if (current && current.job.path !== job.path && (current.job.kind === 'pdf' || current.job.kind === 'office')) current.stop()
+    nextJob = job
+    return
+  }
+  converting = true
+  let cur: PictureJob | null = job
+  while (cur) {
+    const made = await makePicture($, cur)
+    const entry = pictures.get(cur.key)
+    if (entry?.sig === cur.sig && made.state === 'failed' && made.note === 'cancelled') pictures.delete(cur.key)
+    else if (entry?.sig === cur.sig) entry.picture = made
+    else if (made.state === 'ready' && made.file !== cur.path) void $.process.run(['rm', '-f', '--', made.file], { timeoutMs: 5_000 }).catch(() => undefined)
+    void $.ui.invalidate('ui.render')
+    cur = nextJob
+    nextJob = null
+  }
+  converting = false
+}
+
+async function picture($: EngineInterface, path: string, page = 0, px = 0): Promise<Picture | null> {
+  const kind = pictureKind(path)
+  if (!kind) return null
+  const stat = await $.fs.stat(path).catch(() => null)
+  if (!stat) return { state: 'failed', note: 'could not read' }
+  if (stat.kind !== 'file') return { state: 'failed', note: 'not a regular file' }
+  const doc = kind === 'pdf' || kind === 'office'
+  const at = doc ? Math.max(1, page) : 0
+  const wide = doc ? Math.max(200, Math.min(1600, Math.round(px / 100) * 100)) : 0
+  const key = doc ? `${path}\0${at}` : path
+  const sig = cacheName(path, stat.mtimeMs, stat.size, at, wide)
+  const pdf = kind === 'office' ? cacheName(path, stat.mtimeMs, stat.size, 0, 0, 'pdf') : ''
+  const known = pictures.get(key)
+  const gone = known?.sig === sig && known.picture.state === 'ready' && known.picture.file !== path && !(await $.fs.stat(known.picture.file).then(f => f.kind === 'file', () => false))
+  if (gone && known.retried) known.picture = { state: 'failed', note: 'the preview cache was cleared' }
+  if (gone && !known.retried) pictures.delete(key)
+  else if (known?.sig === sig) {
+    pictures.delete(key)
+    pictures.set(key, known)
+    return known.picture
+  }
+  if (known && pictures.has(key)) forget($, key)
+  pictures.set(key, { sig, picture: { state: 'pending' }, retried: gone })
+  for (const old of pictures.keys()) {
+    if (pictures.size <= CACHE_KEEP) break
+    forget($, old)
+  }
+  void convert($, { path, key, kind, sig, mtime: stat.mtimeMs, size: stat.size, page: at, px: wide, pdf })
+  return { state: 'pending' }
+}
+
+function stopScans(keep = ''): void {
+  for (const scan of scans.values()) {
+    if (scan.done || scan.dir === keep) continue
+    scan.stopped = true
+    scan.stop()
+    scans.delete(`${scan.loc ? 'loc:' : ''}${scan.dir}`)
+  }
+}
+
+function usageOf($: EngineInterface, dir: string, loc: boolean): Scan {
+  const key = `${loc ? 'loc:' : ''}${dir}`
+  const known = scans.get(key)
+  if (known && (!known.stale || !known.done)) {
+    scans.delete(key)
+    scans.set(key, known)
+    return known
+  }
+  const scan: Scan = { dir, loc, items: known?.items ?? [], total: known?.total ?? 0, done: false, stale: false, stopped: false, stop: () => undefined }
+  scans.delete(key)
+  scans.set(key, scan)
+  for (const [old, s] of scans) if (scans.size > SCAN_KEEP && s.done) scans.delete(old)
+  $.clock.after(0, () => void runScan($, scan, Boolean(known)))
+  return scan
+}
+
+async function runScan($: EngineInterface, scan: Scan, seeded: boolean): Promise<void> {
+  let out: Usage[] = seeded ? [] : scan.items
+  let total = 0
+  try {
+    if (scan.loc) {
+      if ((await osName($)) === 'win32') throw new Error('no find')
+      const stream = $.process.spawn({ argv: locArgv(scan.dir, pruneArgs((await get($)).root)) })
+      scan.stop = () => void stream.return(undefined as never).catch(() => undefined)
+      let text = ''
+      let drawn = 0
+      for await (const chunk of stream) {
+        if (scan.stopped) return
+        if (chunk.stream !== 'stdout') continue
+        text += chunk.text
+        if (seeded || Date.now() - drawn < SCAN_DRAW_MS) continue
+        drawn = Date.now()
+        out = locUsage(parseLoc(text.slice(0, text.lastIndexOf('\n') + 1)), scan.dir).items
+        scan.items = out
+        void $.ui.invalidate('ui.render')
+      }
+      if (scan.stopped) return
+      const files = parseLoc(text)
+      takeLoc(files, scan.dir, true)
+      const got = locUsage(files, scan.dir)
+      out = got.items
+      total = got.total
+    } else if ((await osName($)) === 'win32') {
+      for (const entry of await $.fs.list(scan.dir)) {
+        if (scan.stopped) return
+        const path = join(scan.dir, entry.name)
+        out.push({ path, name: entry.name, bytes: entry.kind === 'dir' && !entry.isLink ? Math.max(0, await walkSize($, path)) : entry.kind === 'file' ? entry.size : 0 })
+        if (!seeded) void $.ui.invalidate('ui.render')
+      }
+    } else {
+      const stream = $.process.spawn({ argv: ['du', '-akxH', '-d', '2', '--', scan.dir] })
+      scan.stop = () => void stream.return(undefined as never).catch(() => undefined)
+      let text = ''
+      let drawn = 0
+      for await (const chunk of stream) {
+        if (scan.stopped) return
+        if (chunk.stream !== 'stdout') continue
+        text += chunk.text
+        if (seeded || Date.now() - drawn < SCAN_DRAW_MS) continue
+        drawn = Date.now()
+        out = parseDu(text.slice(0, text.lastIndexOf('\n') + 1), scan.dir).items
+        scan.items = out
+        void $.ui.invalidate('ui.render')
+      }
+      if (scan.stopped) return
+      const got = parseDu(text, scan.dir)
+      out = got.items
+      total = got.total ?? 0
+    }
+  } catch (err) {
+    if (scan.stopped) return
+    if (/aborted/.test(String((err as Error)?.message ?? err))) {
+      const key = `${scan.loc ? 'loc:' : ''}${scan.dir}`
+      if (scans.get(key) === scan) scans.delete(key)
+      void $.ui.invalidate('ui.render')
+      return
+    }
+  }
+  scan.items = out
+  scan.total = total || out.reduce((a, u) => a + u.bytes, 0)
+  scan.done = true
+  void $.ui.invalidate('ui.render')
+}
+
+async function mapUp($: EngineInterface, anchor: string): Promise<void> {
+  const t = await get($)
+  mapLock = { anchor: dirname(anchor), pick: anchor, cursor: t.cursor }
+  void $.ui.invalidate('ui.render')
+}
+
+function markStale($: EngineInterface, paths: string[]): void {
+  for (const p of paths) staleQueue.add(posix(p))
+  if (staleTimer) return
+  staleTimer = $.clock.after(STALE_MS, () => {
+    staleTimer = null
+    const hit = [...staleQueue]
+    staleQueue.clear()
+    let any = false
+    for (const scan of scans.values()) {
+      if (!hit.some(p => inside(scan.dir, p))) continue
+      scan.stale = true
+      any = true
+    }
+    if (any) void $.ui.invalidate('ui.render')
+  })
+}
+
+async function pickTile($: EngineInterface, id: string): Promise<void> {
+  if (id.startsWith(REST)) return
+  const now = await $.clock.now()
+  const isDouble = lastPress.key === `tile:${id}` && now - lastPress.at < DOUBLE_MS
+  lastPress = { key: isDouble ? '' : `tile:${id}`, at: now }
+  const t = await get($)
+  const kind = t.nodes.find(n => n.id === id)?.kind ?? (await $.fs.stat(id).then(s => s.kind, () => 'file'))
+  if (isDouble && kind === 'dir') {
+    drillTile($, id, t.cursor)
+    return
+  }
+  const shows = inside(t.root, id) && !isIgnored(t.root, id) && (t.showHidden || !id.slice(id.lastIndexOf('/') + 1).startsWith('.'))
+  mapLock = { anchor: mapAnchor, pick: id, cursor: shows ? id : t.cursor }
+  if (!shows) {
+    void $.ui.invalidate('ui.render')
+    return
+  }
+  await patch($, cur => ({ expanded: [...new Set([...cur.expanded, ...ancestorsOf(id, cur.root)])], cursor: id, selected: id, scroll: null }))
+  await revealPaths($, [id])
+}
+
+function drillTile($: EngineInterface, id: string, cursor: string): void {
+  mapLock = { anchor: id, pick: '', cursor }
+  void $.ui.invalidate('ui.render')
+}
+
+async function mapKey($: EngineInterface, key: string): Promise<boolean> {
+  const t = await get($)
+  if (!mapLock || mapLock.cursor !== t.cursor || !mapLock.pick || (key !== 'return' && key !== 'l' && key !== 'right')) return false
+  const pick = mapLock.pick
+  const kind = t.nodes.find(n => n.id === pick)?.kind ?? (await $.fs.stat(pick).then(s => s.kind, () => 'file'))
+  if (kind !== 'dir') return false
+  drillTile($, pick, t.cursor)
+  return true
+}
+
+function treeKey(): string {
+  return shortcutsSetting === 'always' ? 'nav-o' : 'hk-tree'
+}
+
+function focusPane($: EngineInterface, root: string, key: string): void {
+  void $.ui.open({ id: PANE, title: `Files: ${root.split('/').pop() || root}`, focus: true }).then(() => (key ? $.ui.focus({ requestId: PANE, key }) : undefined)).catch(() => {})
+}
+
+function toggleShortcuts($: EngineInterface): void {
+  if (shortcutsSetting !== 'auto') return
+  const mine = ++shortcutsTimer
+  shortcutsShown = !shortcutsShown
+  if (shortcutsShown) $.clock.after(SHORTCUTS_MS, () => {
+    if (mine !== shortcutsTimer) return
+    shortcutsShown = false
+    void $.ui.invalidate('ui.render')
+  })
+  void $.ui.invalidate('ui.render')
+}
+
+async function toggleSplit($: EngineInterface): Promise<void> {
+  overPeek = false
+  peekTop = 0
+  await patch($, cur => ({ split: !cur.split }))
+}
+
+function scrollSplit($: EngineInterface, to: number): void {
+  const last = Math.max(0, (peeked?.text.split('\n').length ?? 1) - peekRows)
+  const top = Math.max(0, Math.min(last, to))
+  if (top === peekTop) return
+  peekTop = top
+  void $.ui.invalidate('ui.render')
+}
+
+function peekTarget(t: FileTree): string {
+  const cur = t.nodes.find(n => n.id === t.cursor)
+  if (cur) return cur.kind === 'dir' ? '' : cur.id
+  const sel = t.selected ? t.nodes.find(n => n.id === t.selected) : undefined
+  return sel && sel.kind !== 'dir' ? sel.id : ''
+}
+
 async function showPreview($: EngineInterface, path: string): Promise<void> {
   await loadPreview($, path)
   await patch($, () => ({ preview: path, previewTop: 0, selected: path }))
@@ -1038,7 +1564,7 @@ function parkPreview($: EngineInterface): void {
 
 async function closePreview($: EngineInterface): Promise<void> {
   await patch($, () => ({ preview: '', previewTop: 0 }))
-  $.clock.after(100, () => void $.ui.focus({ requestId: PANE, key: showShortcuts ? 'nav-o' : 'rows' }).catch(() => {}))
+  $.clock.after(100, async () => focusPane($, (await get($)).root, treeKey()))
 }
 
 async function jumpDiff($: EngineInterface, dir: 1 | -1): Promise<void> {
@@ -1100,7 +1626,7 @@ async function openFile($: EngineInterface, path: string, how: { mode?: string; 
   const editor = mode === 'editor' ? (await $.env.get('VISUAL')) || (await $.env.get('EDITOR')) || 'vi' : undefined
   try {
     if (editor && host === 'herdr') return await openInHerdr($, editor, path, how.line)
-    const { argv, init } = editor ? tmuxOpenCommand(editor, path, how.line) : custom ? { argv: os === 'linux' ? ['sh', '-c', LINUX_LAUNCH, 'sh', ...custom] : custom, init: { timeoutMs: 10_000 } } : openCommand(os, path)
+    const { argv, init } = editor ? tmuxOpenCommand(editor, path, how.line, targetSetting) : custom ? { argv: os === 'linux' ? ['sh', '-c', LINUX_LAUNCH, 'sh', ...custom] : custom, init: { timeoutMs: 10_000 } } : openCommand(os, path)
     const run = await $.process.run(argv, init)
     if (run.exitCode !== 0) $.ui.toast(`could not open ${path} with ${editor ?? custom?.[0] ?? argv[0]}: ${run.stderr.trim().split('\n')[0] || `exit ${run.exitCode}`}`)
   } catch {
@@ -1115,7 +1641,7 @@ async function editorHost($: EngineInterface, os: 'linux' | 'darwin' | 'win32'):
 }
 
 async function openInHerdr($: EngineInterface, editor: string, path: string, line?: number): Promise<void> {
-  const { split, run, init } = herdrOpenCommand((await $.env.get('HERDR_BIN_PATH')) || 'herdr', editor, path, line)
+  const { split, run, init } = herdrOpenCommand((await $.env.get('HERDR_BIN_PATH')) || 'herdr', editor, path, line, targetSetting, (await $.env.get('HERDR_WORKSPACE_ID')) || '')
   const made = await $.process.run(split, init)
   const sent = made.exitCode === 0 ? await $.process.run(run(herdrPane(made.stdout)), init) : made
   if (sent.exitCode !== 0) $.ui.toast(`could not open ${path} with ${editor}: ${herdrError(sent.stderr) || `exit ${sent.exitCode}`}`)
@@ -1138,8 +1664,9 @@ async function toggle($: EngineInterface, n: FileNode): Promise<void> {
   await patch($, t => {
     const open = new Set(t.expanded)
     if (n.kind === 'dir') open.has(n.id) ? open.delete(n.id) : open.add(n.id)
-    return { expanded: [...open], cursor: n.id, selected: n.kind === 'dir' ? t.selected : n.id }
+    return { expanded: [...open], cursor: n.id, selected: n.id }
   })
+  void watchTree($)
 }
 
 async function press($: EngineInterface, n: FileNode): Promise<void> {
@@ -1160,44 +1687,71 @@ async function openNode($: EngineInterface, n: FileNode): Promise<void> {
   } else await openFile($, n.id)
 }
 
+function turnPage($: EngineInterface, by: number): boolean {
+  const kind = peekPath ? pictureKind(peekPath) : ''
+  if (kind !== 'pdf' && kind !== 'office') return false
+  if (kind === 'office' && !pictures.has(`${peekPath}\0${docPages.get(peekPath) ?? 1}`)) return true
+  const now = docPages.get(peekPath) ?? 1
+  const next = Math.max(1, Math.min(docCounts.get(peekPath) ?? now + 1, now + by))
+  if (next !== now) {
+    docPages.set(peekPath, next)
+    void $.ui.invalidate('ui.render')
+  }
+  return true
+}
+
+async function cellPixels($: EngineInterface): Promise<{ cw: number; ch: number } | null> {
+  try {
+    const [cw = 0, ch = 0] = (await $.process.run(['python3', '-I', '-c', CELL_PROBE], { timeoutMs: 3_000 })).stdout.trim().split(/\s+/).map(Number)
+    return cw > 2 && ch > 4 ? { cw, ch } : null
+  } catch {
+    return null
+  }
+}
+
+async function ghosttyColors($: EngineInterface): Promise<TermColors> {
+  const args = (await $.process.run(['sh', '-c', GHOSTTY_ARGS], { timeoutMs: 3_000 }).catch(() => ({ stdout: '' }))).stdout.split('\n')
+  const files = args.filter(a => a.startsWith('--config-file=')).map(a => a.slice('--config-file='.length).replace(/^\?/, ''))
+  const own = args.includes('--config-default-files=false') ? '' : (await $.process.run(['ghostty', '+show-config'], { timeoutMs: 3_000 }).catch(() => ({ stdout: '' }))).stdout
+  const read = await Promise.all(files.map(f => $.fs.read(f).then(String, () => '')))
+  return parseGhostty([own, ...read, ...args.filter(a => a.startsWith('--'))].join('\n'))
+}
+
 async function navigate($: EngineInterface, key: string, shift = false, surface?: string): Promise<void> {
   const t = await get($)
   const rows = visibleRows(t)
   const at = rows.findIndex(r => r.node.id === t.cursor)
   const cur = rows[at]?.node
+  const onRoot = Boolean(t.root) && t.cursor === t.root
   const move = (d: number) => {
-    const target = rows[Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + d))]
-    return target ? patch($, () => ({ cursor: target.node.id, scroll: null })) : Promise.resolve()
+    const to = onRoot ? (d < 0 ? -1 : Math.min(rows.length - 1, d - 1)) : at === 0 && d === -1 ? -1 : Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + d))
+    const id = to < 0 ? t.root : rows[to]?.node.id
+    return id ? patch($, () => ({ cursor: id, selected: id, scroll: null })) : Promise.resolve()
   }
-  if (key === 'up' || key === 'k') await move(-1)
+  const page = Math.max(1, peekRows - 1)
+  const peek: Record<string, number> = { f: page, b: -page, pageup: -page, pagedown: page }
+  if (key === 'p' && surface !== 'desktop' && t.split && mapLock?.cursor === t.cursor && mapLock.pick === t.cursor && peekTarget(t)) {
+    mapLock = null
+    void $.ui.invalidate('ui.render')
+  } else if (key === 'p' && surface !== 'desktop') await toggleSplit($)
+  else if (t.split && splitShown && surface !== 'desktop' && (key === '[' || key === ']') && turnPage($, key === ']' ? 1 : -1)) return
+  else if (t.split && splitShown && surface !== 'desktop' && key in peek) scrollSplit($, peekTop + (peek[key] ?? 0))
+  else if (key === 'up' || key === 'k') await move(-1)
   else if (key === 'down' || key === 'j') await move(1)
   else if (key === 'pageup') await move(-10)
   else if (key === 'pagedown') await move(10)
   else if (key === 'home') await move(-rows.length)
   else if (key === 'end') await move(rows.length)
+  else if (key === '?') toggleShortcuts($)
+  else if (key === 's') $.clock.after(50, () => focusPane($, t.root, 'q'))
   else if (cur && key === 'd') await diffFile($, cur.id)
   else if (cur && (key === 'y' || key === 'Y')) await copyPath($, cur.id, key === 'Y' || shift, surface)
   else if (cur && (key === 'right' || key === 'l') && cur.kind === 'dir' && !t.expanded.includes(cur.id)) await toggle($, cur)
   else if (cur && (key === 'left' || key === 'h')) {
     if (cur.kind === 'dir' && t.expanded.includes(cur.id)) await toggle($, cur)
-    else if (cur.parent !== t.root) await patch($, () => ({ cursor: cur.parent }))
-  } else if (cur && key === 'return') await (cur.kind !== 'dir' ? openNode($, cur) : toggle($, cur))
+    else if (cur.parent !== t.root) await patch($, () => ({ cursor: cur.parent, selected: cur.parent }))
+  } else if (cur && (key === 'return' || key === 'o')) await (cur.kind !== 'dir' ? openNode($, cur) : toggle($, cur))
   else if (cur && (key === ' ' || key === 'space')) await (cur.kind !== 'dir' && (await osName($)) === 'darwin' ? quickLook($, cur.id) : toggle($, cur))
-}
-
-async function loadTheme($: EngineInterface): Promise<void> {
-  const path = `${(await $.env.get('HOME')) ?? ''}/${THEME_FILE}`
-  try {
-    const stat = await $.fs.stat(path)
-    if (stat.kind !== 'file') throw new Error('no theme file')
-    if (stat.mtimeMs === themeMtime) return
-    await $.state.set(THEME, parseTheme(String(await $.fs.read(path))))
-    themeMtime = stat.mtimeMs
-  } catch {
-    if (themeMtime === 0) return
-    await $.state.set(THEME, DEFAULT_THEME)
-    themeMtime = 0
-  }
 }
 
 async function pressHeader($: EngineInterface, id: string): Promise<void> {
@@ -1210,16 +1764,23 @@ async function pressHeader($: EngineInterface, id: string): Promise<void> {
     await reset($, await cwdOf($))
   } else if (id === 'refresh') {
     searchIndex = null
+    for (const scan of scans.values()) scan.stale = true
     await staleSizes($)
     await loadDirs($, [t.root, ...t.expanded])
     await detectRepo($)
     await refreshGit($)
     if (t.query.trim()) await search($, t.query)
   } else if (id === 'hidden') await patch($, cur => ({ showHidden: !cur.showHidden }))
-  else if (id === 'size') await patch($, cur => ({ showSize: !cur.showSize }))
+  else if (id === 'size') await patch($, cur => ({ column: cur.column === 'date' ? 'size' : cur.column === 'size' ? 'loc' : 'date' }))
   else if (id === 'collapse') await patch($, cur => ({ expanded: [], nodes: dropBelow(cur.nodes, cur.nodes.filter(x => x.parent === cur.root && x.kind === 'dir').map(x => x.id)) }))
-  else if (id === 'unselect') await patch($, () => ({ selected: '' }))
+  else if (id === 'unselect') await patch($, () => ({ selected: '', cursor: '' }))
   else if (id === 'external' && t.preview) await openFile($, t.preview, { mode: '' })
+  else if (id === 'split') await toggleSplit($)
+}
+
+async function selectRoot($: EngineInterface): Promise<void> {
+  mapLock = null
+  await patch($, cur => ({ cursor: cur.root, selected: cur.root, scroll: null }))
 }
 
 function shortPath(path: string): string {
@@ -1232,51 +1793,64 @@ export const register: Register = (on, options) => {
   showReads = activity.includes('reads')
   showWrites = activity.includes('writes')
   followClaude = options?.follow !== 'off'
-  sizeDefault = options?.column === 'size'
+  columnDefault = options?.column === 'size' || options?.column === 'loc' ? options.column : 'date'
   showAge = options?.column === 'age'
   showHints = options?.hints !== 'off'
   ignoreNames = typeof options?.ignore === 'string' ? options.ignore.split(/[\s,]+/).filter(Boolean) : []
   searchGap = options?.spacing !== 'off'
-  showShortcuts = options?.shortcuts !== 'off'
+  shortcutsSetting = options?.shortcuts === 'always' || options?.shortcuts === 'off' ? options.shortcuts : 'auto'
+  shortcutsShown = shortcutsSetting === 'always'
+  treemapSetting = options?.treemap === 'image' || options?.treemap === 'cells' || options?.treemap === 'off' ? options.treemap : 'auto'
   openWithSetting = typeof options?.open === 'string' ? options.open : ''
   binariesInDefaultApp = options?.binaries === 'default app'
   editWithSetting = typeof options?.edit === 'string' ? options.edit.trim() : ''
   palette = parsePalette(options?.palette)
   diffWithSetting = typeof options?.diff === 'string' ? options.diff.trim() : ''
+  targetSetting = terminalTarget(options?.target)
   noDock = options?.start === 'off'
+  splitAt = options?.split === 'top' ? 'top' : 'bottom'
   on('session.start', async ($, e, next) => {
+    cached ??= { ...emptyTree(''), ...(await $.state.get(TREE)).value }
     await $.command.register({ name: 'filetree', description: 'Show or hide the file tree; args: [path | open] (no path = cwd, open = never hide)' })
     if (palette.unknown.length) void $.ui.toast(`filetree palette: ignored ${palette.unknown.join(' ')}; use key=#hex with fg, bg, accent, muted, urgent, selection, hover, added, modified, renamed, add or del`)
     const windows = (await $.env.get('OS')) === 'Windows_NT'
     useDrives(windows)
     inTmux = !windows && Boolean(await $.env.get('TMUX'))
     inHerdr = !windows && Boolean(await $.env.get('HERDR_ENV'))
+    pictureSession = (await $.session.id()).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'session'
+    pictureBase = ((await $.env.get('XDG_RUNTIME_DIR')) || (await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '') || '/'
     home = posix(((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/[\\/]+$/, ''))
     activityId = Math.max(activityId, ...(await activities($)).map(a => a.id))
     void (async () => {
-      pointer = await finePointerOk($)
-      try {
-        const remote = Boolean((await $.env.get('SSH_CONNECTION')) || (await $.env.get('SSH_TTY')))
-        noNerd = !remote && (windows || (await fontState($, 'f04eb')) !== 'ok')
-      } catch {
-        noNerd = true
-      }
-      await loadTheme($)
-      await readThemeSetting($).catch(() => undefined)
-      themePoll?.cancel()
-      themePoll = themeMtime ? $.clock.every(THEME_POLL_MS, () => void loadTheme($)) : null
-      ageTick?.cancel()
-      ageTick = showAge ? $.clock.every(AGE_TICK_MS, () => $.ui.invalidate('ui.render')) : null
-      gitPoll?.cancel()
-      gitStamp = null
-      gitPoll = $.clock.every(GIT_POLL_MS, () => void followCwd($).then(moved => moved || gitChanged($)))
+      const ready = (async () => {
+        pointer = await finePointerOk($)
+        const termProgram = await $.env.get('TERM_PROGRAM')
+        kittyTerm = !windows && !inTmux && !inHerdr && (termProgram === 'ghostty' || Boolean(await $.env.get('KITTY_WINDOW_ID')) || /kitty|ghostty/.test((await $.env.get('TERM')) ?? ''))
+        if (treemapSetting === 'image' || (treemapSetting === 'auto' && kittyTerm)) {
+          cellPx = await cellPixels($)
+          if (termProgram === 'ghostty') termColors = await ghosttyColors($)
+        }
+        try {
+          const remote = Boolean((await $.env.get('SSH_CONNECTION')) || (await $.env.get('SSH_TTY')))
+          noNerd = !remote && (windows || (await fontState($, 'f04eb')) !== 'ok')
+        } catch {
+          noNerd = true
+        }
+        await readThemeSetting($).catch(() => undefined)
+      })()
       const t = await get($)
       if (t.flashOn) await patch($, () => ({ flash: [], flashDim: [], flashOn: false, flashTones: {} }))
       if (t.preview) await patch($, () => ({ preview: '', previewTop: 0 }))
       await setActivities($, cur => cur.map(a => (a.state === 'running' ? { ...a, state: 'failed', label: `${a.kind} interrupted` } : a)))
       const cwd = await cwdOf($)
-      if (!t.root || t.nodes.length === 0 || (follow && t.root !== cwd)) await reset($, cwd)
-      else if (!noDock) await $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` })
+      const shown = !t.root || t.nodes.length === 0 || (follow && t.root !== cwd) ? reset($, cwd, false, ready) : ready.then(() => (noDock ? undefined : $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` })))
+      await ready
+      ageTick?.cancel()
+      ageTick = showAge ? $.clock.every(AGE_TICK_MS, () => $.ui.invalidate('ui.render')) : null
+      gitPoll?.cancel()
+      gitStamp = null
+      gitPoll = $.clock.every(GIT_POLL_MS, () => void followCwd($).then(moved => moved || gitChanged($)).then(() => watchTree($)))
+      await shown
     })()
     return next(e)
   })
@@ -1388,7 +1962,26 @@ export const register: Register = (on, options) => {
       }
       return {}
     }
-    if (e.requestId !== PANE || e.element !== 'rows' || !e.data || typeof e.data !== 'object') return next(e)
+    if (e.requestId === PANE && e.element === 'peek' && e.data && typeof e.data === 'object') {
+      const data = e.data as { key?: unknown; over?: unknown; scrollTo?: unknown }
+      if (typeof data.over === 'boolean') overPeek = data.over
+      else if (typeof data.scrollTo === 'number') {
+        const last = Math.max(0, (peeked?.text.split('\n').length ?? 1) - peekRows)
+        scrollSplit($, Math.round(Math.max(0, Math.min(1, data.scrollTo)) * last))
+      } else if (typeof data.key === 'string') {
+        const page = Math.max(1, peekRows - 1)
+        const by: Record<string, number> = { up: -1, k: -1, down: 1, j: 1, f: page, b: -page, pageup: -page, pagedown: page, space: page, ' ': page, home: -Infinity, end: Infinity }
+        if (data.key === 'p') await toggleSplit($)
+        else if (data.key === '[' || data.key === ']') turnPage($, data.key === ']' ? 1 : -1)
+        else if (data.key in by) scrollSplit($, peekTop + (by[data.key] ?? 0))
+      }
+      return {}
+    }
+    if (e.requestId === PANE && e.element === 'treemap' && e.data && typeof (e.data as { tab?: unknown }).tab === 'string') {
+      await pickTile($, (e.data as { tab: string }).tab)
+      return {}
+    }
+    if (e.requestId !== PANE || (e.element !== 'rows' && e.element !== 'treemap') || !e.data || typeof e.data !== 'object') return next(e)
     const data = e.data as { press?: unknown; key?: unknown; ctrl?: unknown; shift?: unknown; scrollTo?: unknown; copy?: unknown }
     void sync($)
     const t = await get($)
@@ -1420,12 +2013,24 @@ export const register: Register = (on, options) => {
       else if (data.key in by) await scrollPreview($, by[data.key] ?? 0)
       return {}
     }
+    if (e.element === 'treemap' && (await mapKey($, data.key))) return {}
     await navigate($, data.key, Boolean(data.shift), e.surface)
     return {}
   })
 
   on('session.end', async ($, e, next) => {
+    cached = null
+    watcher?.stop()
+    watcher = null
+    snapshot?.cancel()
+    snapshot = null
     const result = await next(e)
+    if (sessionDir) {
+      const dir = sessionDir
+      sessionDir = ''
+      pictures.clear()
+      await $.process.run(['sh', '-c', CLEAN, 'sh', dir], { timeoutMs: 10_000 }).catch(() => undefined)
+    }
     if (e.reason === 'clear' || e.reason === 'resume' || e.reason === 'other') $.clock.after(0, () => void settleRoot($))
     return result
   })
@@ -1441,6 +2046,10 @@ export const register: Register = (on, options) => {
     const t = await get($)
     if (t.preview) {
       await scrollPreview($, Math.sign(e.by) * Math.max(3, Math.abs(e.by)))
+      return {}
+    }
+    if (t.split && overPeek) {
+      scrollSplit($, peekTop + Math.sign(e.by) * Math.max(3, Math.abs(e.by)))
       return {}
     }
     const to = Math.max(0, Math.min(view.max, (t.scroll ?? view.from) + Math.sign(e.by) * Math.max(3, Math.abs(e.by))))
@@ -1484,43 +2093,46 @@ export const register: Register = (on, options) => {
       const { Box: Empty } = $.ui.resolve(e)
       return <Empty />
     }
-    const unicode = glyphSetting === 'plain' || (glyphSetting === 'auto' && (noNerd || e.surface === 'desktop'))
-    const { Box, Text, Button, Input, Client } = $.ui.resolve(e)
+    const unicode = glyphSetting === 'plain' || glyphSetting === 'text' || (glyphSetting === 'auto' && (noNerd || e.surface === 'desktop'))
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button, Input, Client } = elements
+    const Image = 'Image' in elements ? elements.Image : undefined
     const t = await get($)
-    const light = !themeMtime && e.surface !== 'desktop' && lightTerminal
-    const theme: Theme = { ...(light ? LIGHT_THEME : ((await $.state.get(THEME)).value ?? DEFAULT_THEME)), ...palette.theme }
+    const light = e.surface !== 'desktop' && lightTerminal
+    const theme: Theme = { ...DEFAULT_THEME, ...palette.theme }
     const tones = light ? LIGHT_TONES : TONES
-    const gitColors = { ...(light ? LIGHT_GIT_COLOR : GIT_COLOR), ...palette.git }
-    const addColor = palette.add ?? (light ? LIGHT_ADD_COLOR : ADD_COLOR)
-    const delColor = palette.del ?? (light ? LIGHT_DEL_COLOR : DEL_COLOR)
-    const rowColors = { activeBg: theme.selection, hoverBg: palette.hover ?? (light ? LIGHT_HOVER : faint(theme.selection)), tones: light ? LIGHT_SHIMMER : SHIMMER }
+    const mutedText = theme.muted ? { color: theme.muted } : { dimColor: true }
+    const gitColors = { ...GIT_COLOR, ...palette.git }
+    const addColor = palette.add ?? ADD_COLOR
+    const delColor = palette.del ?? DEL_COLOR
+    const rowColors = { activeBg: theme.selection, hoverBg: palette.hover ?? (theme.selection.startsWith('#') ? faint(theme.selection) : ''), tones: light ? LIGHT_SHIMMER : SHIMMER }
     // The desktop tab never hands the wheel or the scrollbar drag to the pane, so
     // there it draws every row and lets the engine scroll the body.
     nativeScroll = e.surface === 'desktop'
     const button = (b: ButtonProps) => <Client key={`button-${b.id}`} module="./button.tsx" props={{ id: b.id, label: b.label, dim: b.dim } satisfies ButtonProps} />
     // What the hovered header button does, left of the buttons, when it fits beside a title that
     // long; the buttons are Clients only so that they can say when the pointer is over them.
-    const hint = (buttons: { id: string; hint: string }[], title: number) => {
+    const hint = (buttons: { id: string; label: string; hint: string }[], title: number) => {
       const text = buttons.find(b => b.id === hovered)?.hint
       if (!text) return null
-      const room = e.props.bodyColumns - title - buttons.length * (e.surface === 'desktop' ? 3 : 2) - 2
-      return text.length <= room ? <Text color={theme.muted}>{`${text} `}</Text> : null
+      const room = e.props.bodyColumns - title - buttons.reduce((w, b) => w + b.label.length + (e.surface === 'desktop' ? 2 : 1), 0) - 2
+      return text.length <= room ? <Text {...mutedText}>{`${text} `}</Text> : null
     }
     if (t.preview) {
       if (previewed?.path !== t.preview) await loadPreview($, t.preview)
       const p = previewed
-      const markdown = /\.(md|markdown|mdx)$/i.test(t.preview)
+      const markdown = /\.(md|markdown|mdx|docx|odt|rtf)$/i.test(t.preview)
       const all = p?.diff?.length ?? (p?.text ?? '').split('\n').length
       previewRows = nativeScroll ? all : Math.max(4, (e.props.scroll?.bodyRows ?? 40) - (p?.note ? 3 : 2))
       const start = nativeScroll ? 0 : p?.diff ? Math.min(t.previewTop, Math.max(0, all - 1)) : Math.min(t.previewTop, Math.max(0, all - previewRows))
       const win = p?.diff ? diffWindow(p.diff, start, previewRows) : previewLines(p?.text ?? '', start, previewRows, markdown)
       previewLine = win.top + 1
       const name = t.preview !== t.root && inside(t.root, t.preview) ? relative(t.root, t.preview) : shortPath(t.preview)
-      const external = { id: 'external', label: unicode ? '↗' : '\u{f08e}', dim: true, hint: 'open in default app' }
+      const external = { id: 'external', label: glyphSetting === 'text' ? 'open' : unicode ? '↗' : '\u{eb14}', dim: true, hint: 'open in default app' }
       return (
         <Box flexDirection="column" minHeight={Math.max(1, e.props.scroll?.bodyRows ?? 1)} backgroundColor={theme.bg || undefined}>
           <Box flexDirection="row">
-            <Button key="back" plain hotkey="h" autoFocus={editWithSetting || inTmux || inHerdr ? undefined : true} label={unicode ? '← files' : '\u{f004d} files'} onPress={() => void closePreview($)} />
+            <Button key="back" plain hotkey="h" autoFocus={editWithSetting || inTmux || inHerdr ? undefined : true} label={unicode ? '← files' : '\u{ea9b} files'} onPress={() => void closePreview($)} />
             <Text> </Text>
             <Box flexShrink={1} flexGrow={1}>
               <Text bold wrap="truncate-start">{name}</Text>
@@ -1529,15 +2141,15 @@ export const register: Register = (on, options) => {
             {button(external)}
           </Box>
           <Box flexDirection="row" gap={2}>
-            {([['j', '↓', '\u{f0045}', 1], ['k', '↑', '\u{f005d}', -1], ['f', 'page ↓', '\u{f0045} page', previewRows - 2], ['b', 'page ↑', '\u{f005d} page', 2 - previewRows]] as const).map(([k, plain, nerd, by]) => {
+            {([['j', '↓', '\u{ea9a}', 1], ['k', '↑', '\u{eaa1}', -1], ['f', 'page ↓', '\u{ea9a} page', previewRows - 2], ['b', 'page ↑', '\u{eaa1} page', 2 - previewRows]] as const).map(([k, plain, nerd, by]) => {
               const step = p?.diff && (k === 'j' || k === 'k') ? (p.diff.some(l => l.kind === '@') ? 'file' : 'hunk') : ''
               const label = step ? `${unicode ? plain : nerd} ${step}` : unicode ? plain : nerd
               return <Button key={`pv-${k}`} plain dimColor hotkey={k} label={label} onPress={() => void (step ? jumpDiff($, by > 0 ? 1 : -1) : scrollPreview($, by)).then(() => parkPreview($))} />
             })}
             <Button key="pv-d" plain dimColor hotkey="d" label={p?.diff ? (t.nodes.find(n => n.id === t.preview)?.kind === 'dir' ? 'tree' : 'file') : 'diff'} onPress={() => void diffFile($, t.preview)} />
-            {editWithSetting || inTmux || inHerdr ? <Button key="edit" plain dimColor autoFocus hotkey="e" label={`${unicode ? 'edit' : '\u{f03eb} edit'} :${previewLine}`} onPress={() => void editPreview($, t.preview)} /> : null}
+            {editWithSetting || inTmux || inHerdr ? <Button key="edit" plain dimColor autoFocus hotkey="e" label={`${unicode ? 'edit' : '\u{ea73} edit'} :${previewLine}`} onPress={() => void editPreview($, t.preview)} /> : null}
           </Box>
-          {p?.note ? <Text dimColor={!light} color={light ? theme.muted : undefined}>{p.note}</Text> : null}
+          {p?.note ? <Text {...mutedText}>{p.note}</Text> : null}
           <Client
             key="rows"
             module="./rows.tsx"
@@ -1555,7 +2167,14 @@ export const register: Register = (on, options) => {
     const untracked = new Set(t.untrackedDirs)
     const width = Math.max(24, e.props.bodyColumns)
     const rows = visibleRows(t)
-    const fixed = 1 + (showShortcuts ? 1 : 0) + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
+    const body = e.props.scroll?.bodyRows ?? 40
+    const footer = t.nodes.find(n => n.id === t.cursor)?.id ?? (t.selected || '')
+    const chrome = 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
+    const spare = body - chrome - 5
+    const splitRows = t.split && !nativeScroll && spare >= 6 && (treemapSetting !== 'off' || Boolean(peekTarget(t))) ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
+    splitShown = splitRows > 0
+    if (!splitShown) overPeek = false
+    const fixed = splitRows + 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
     const room = nativeScroll ? Math.max(1, rows.length) : Math.max(5, (e.props.scroll?.bodyRows ?? 40) - fixed)
     const isLit = (id: string) => bright.has(id) || dimmed.has(id)
     const focus = followClaude && t.flashOn ? ([...t.flash].reverse().find(id => id !== BRANCH_ROW) ?? t.cursor) : t.cursor
@@ -1576,26 +2195,36 @@ export const register: Register = (on, options) => {
     }
     view = { from, max }
     const shown = rows.slice(from, from + room - pinned.length)
-    if (t.showSize) wantSizes($, [...pinned, ...shown].filter(r => r.node.kind === 'dir' && !(r.node.id in t.dirSizes)).map(r => r.node.id))
+    if (t.column === 'size') wantSizes($, [...pinned, ...shown].filter(r => r.node.kind === 'dir' && !(r.node.id in t.dirSizes)).map(r => r.node.id))
+    if (t.column === 'loc') {
+      const seen = [...pinned, ...shown].map(r => r.node)
+      wantLoc($, seen.filter(n => n.kind === 'dir' && !locCache.has(n.id)).map(n => n.id), true)
+      wantLoc($, [...new Set(seen.filter(n => n.kind === 'file' && counted(n.name) && !locListed.has(n.parent)).map(n => n.parent))], false)
+    }
     const totals: [number, number] = t.top ? (t.diff[t.root] ?? [0, 0]) : [0, 0]
     const countSegs = (c: [number, number, number] | undefined): Seg[] => {
       if (!c) return []
       const out: Seg[] = []
       if (c[0] > 0) out.push({ t: ` ?:${c[0]}`, c: gitColors['?'] ?? addColor })
-      if (c[1] > 0) out.push({ t: ` M:${c[1]}`, c: gitColors.M ?? '#e5c07b' })
+      if (c[1] > 0) out.push({ t: ` M:${c[1]}`, c: gitColors.M ?? 'ansi256(3)' })
       if (c[2] > 0) out.push({ t: ` D:${c[2]}`, c: theme.urgent })
       return out
     }
     const rootCounts = t.top ? countSegs(t.counts[t.root]) : []
-    const buttons = [
-      { id: 'up', label: unicode ? '↑' : '\u{f005d}', dim: true, hint: 'parent folder' },
-      { id: 'cwd', label: unicode ? '⌂' : '\u{f02dc}', dim: !follow, hint: 'follow the cwd' },
-      { id: 'refresh', label: unicode ? '↻' : '\u{f0450}', dim: true, hint: 'reload tree and git' },
-      { id: 'hidden', label: unicode ? (t.showHidden ? '◉' : '○') : t.showHidden ? '\u{f0208}' : '\u{f0209}', dim: !t.showHidden, hint: t.showHidden ? 'hide hidden files' : 'show hidden files' },
-      { id: 'size', label: unicode ? 'Σ' : '\u{f02ca}', dim: !t.showSize, hint: t.showSize ? 'show dates' : 'show sizes' },
+    const plainButtons = [
+      ...(t.selected ? [{ id: 'unselect', label: unicode ? '⊘' : '\u{eabd}', dim: false, hint: 'clear selection' }] : []),
+      { id: 'up', label: unicode ? '△' : '\u{ebff}', dim: true, hint: 'parent folder' },
+      { id: 'cwd', label: unicode ? '◎' : '\u{eb06}', dim: !follow, hint: 'follow the cwd' },
+      { id: 'refresh', label: unicode ? '⮌' : '\u{eb37}', dim: true, hint: 'reload tree and git' },
+      { id: 'hidden', label: unicode ? (t.showHidden ? '⊙' : '○') : t.showHidden ? '\u{f0b95}' : '\u{eae7}', dim: !t.showHidden, hint: t.showHidden ? 'hide hidden files' : 'show hidden files' },
+      { id: 'size', label: unicode ? '◫' : '\u{ea90}', dim: t.column === 'date', hint: t.column === 'date' ? 'show sizes' : t.column === 'size' ? 'show lines of code' : 'show dates' },
       { id: 'collapse', label: unicode ? '⊟' : '\u{eac5}', dim: true, hint: 'collapse all' },
-      ...(t.selected ? [{ id: 'unselect', label: unicode ? '⊘' : '\u{f0777}', dim: false, hint: 'clear selection' }] : []),
+      ...(nativeScroll ? [] : [{ id: 'split', label: unicode ? '⊡' : splitAt === 'top' ? '\u{ebf6}' : '\u{ec01}', dim: !t.split, hint: t.split ? 'hide preview' : 'show preview' }]),
     ]
+    const wordButtons = plainButtons.map(b => ({ ...b, label: WORDS[b.id] ?? b.label }))
+    const wordWidth = wordButtons.reduce((w, b) => w + b.label.length + 1, 1)
+    const buttons = glyphSetting === 'text' && e.props.bodyColumns - wordWidth >= 8 ? wordButtons : plainButtons
+    const rootGlyph = unicode ? '■' : t.top === t.root ? '\u{f02a2}' : '\u{e5fe}'
     const header = t.top ? [t.top.split('/').pop() ?? t.top, t.prefix.replace(/\/$/, '')].filter(Boolean).join('/') : t.root.split('/').pop() || t.root
 
     const rowSpec = (r: (typeof rows)[number]): RowSpec => {
@@ -1610,7 +2239,17 @@ export const register: Register = (on, options) => {
       const iconColor = isIgnored ? theme.muted : (gitColor ?? (n.hidden ? theme.muted : n.kind === 'dir' ? theme.accent : theme.muted))
       const nameColor = isIgnored ? theme.muted : (gitColor ?? (n.hidden ? theme.muted : theme.fg || undefined))
       const loc = t.diff[n.id]
-      const meta = t.showSize
+      const meta = t.column === 'loc'
+        ? n.kind === 'dir'
+          ? locCache.has(n.id)
+            ? (locCache.get(n.id) ?? 0) > 0 ? formatLoc(locCache.get(n.id) ?? 0) : ''
+            : '…'
+          : n.kind === 'file' && counted(n.name)
+            ? locCache.has(n.id)
+              ? formatLoc(locCache.get(n.id) ?? 0)
+              : locListed.has(n.parent) ? '' : '…'
+            : ''
+        : t.column === 'size'
         ? n.kind === 'dir'
           ? n.id in t.dirSizes
             ? formatSize(t.dirSizes[n.id] ?? -1)
@@ -1633,7 +2272,7 @@ export const register: Register = (on, options) => {
       const name = n.name.length > cols ? n.name.slice(0, cols - 1) + '…' : n.name
       const caret = n.kind === 'dir' ? (unicode ? (r.open ? '▾' : '▸') : r.open ? CHEVRON_OPEN : CHEVRON_CLOSED) + ' ' : '  '
       const isRepo = n.kind === 'dir' && n.id === t.top
-      const glyph = unicode ? (n.kind === 'dir' ? '■' : '·') : fileIcon(n, r.open, isRepo)
+      const glyph = unicode ? (n.kind === 'dir' ? '■' : '∙') : fileIcon(n, r.open, isRepo)
       const lit = isBright || isDim
       const left: Seg[] = [
         { t: '  '.repeat(r.depth) },
@@ -1686,7 +2325,7 @@ export const register: Register = (on, options) => {
           </Box>
           {b.upstream && (
             <Box flexShrink={1} overflow="hidden">
-              <Text color={theme.muted} wrap="truncate-end">
+              <Text {...mutedText} wrap="truncate-end">
                 {` ${b.upstream}`}
               </Text>
             </Box>
@@ -1698,7 +2337,7 @@ export const register: Register = (on, options) => {
             {rootCounts.map(c => (
               <Text color={c.c}>{c.t}</Text>
             ))}
-            {rootCounts.length === 0 && totals[0] === 0 && totals[1] === 0 && <Text color={theme.muted}> clean</Text>}
+            {rootCounts.length === 0 && totals[0] === 0 && totals[1] === 0 && <Text {...mutedText}> clean</Text>}
           </Box>
         </Box>
       )
@@ -1715,30 +2354,256 @@ export const register: Register = (on, options) => {
           <Text bold={a.state === 'running'} color={color}>
             {a.state === 'running' ? `${a.label}…` : a.label}
           </Text>
-          {hash && <Text color={theme.muted}>{` ${hash}`}</Text>}
+          {hash && <Text {...mutedText}>{` ${hash}`}</Text>}
         </Box>
       )
     }
 
-    const park = () => void $.ui.focus({ requestId: PANE, key: showShortcuts ? 'nav-o' : 'rows' }).catch(() => {})
+    const peek = async () => {
+      if (!splitRows) {
+        stopScans()
+        return null
+      }
+      peekRows = splitRows - 2
+      const lock = mapLock?.cursor === t.cursor ? mapLock : null
+      if (mapLock && !lock) mapLock = null
+      const target = lock ? '' : peekTarget(t)
+      const anchor = target ? '' : (lock?.anchor ?? (t.nodes.find(n => n.id === t.cursor)?.kind === 'dir' ? t.cursor : t.root))
+      mapPick = lock?.pick ?? ''
+      stopScans(anchor)
+      if (target !== peekPath) {
+        peekPath = target
+        peeked = null
+        peekTop = 0
+        overPeek = false
+      }
+      let start = peekTop
+      const rule = <Text key="peek-rule" {...mutedText}>{'─'.repeat(Math.max(1, e.props.bodyColumns))}</Text>
+      const shown = target || anchor
+      const name = shown ? (shown === t.root ? shown.split('/').pop() || shown : inside(t.root, shown) ? relative(t.root, shown) : shortPath(shown)) : ''
+      const docKind = target ? pictureKind(target) : ''
+      const isDoc = docKind === 'pdf' || docKind === 'office'
+      const docPixels = Boolean(Image) && !imageDenied && !inTmux && !inHerdr
+      const page = isDoc ? (docPages.get(target) ?? 1) : 0
+      const px = Math.round(Math.max(1, e.props.bodyColumns - 1) * (cellPx?.cw ?? 10))
+      const raw = target && (!isDoc || docPixels) ? await picture($, target, page, px) : null
+      const pic = isDoc && raw && raw.state !== 'ready' && !(raw.state === 'failed' && raw.note === 'encrypted') ? null : raw
+      if (isDoc && raw?.state === 'ready' && raw.pages) {
+        docCounts.set(target, raw.pages)
+        if (page < raw.pages) void picture($, target, page + 1, px)
+      }
+      if (!target || pic) overPeek = false
+      let content: RenderElement
+      let status = ''
+      if (!target && anchor) {
+        mapAnchor = anchor
+        const scan = usageOf($, anchor, t.column === 'loc')
+        const cols = Math.max(8, e.props.bodyColumns - 1)
+        const tiles = layout(scan.items, cols, peekRows)
+        const total = scan.done ? scan.total : scan.items.reduce((a, u) => a + u.bytes, 0)
+        const lit = t.flashOn ? t.flash : []
+        const pick = tiles.find(x => x.path === mapPick)
+        const ground = theme.bg
+        const shade = ground.startsWith('#') && theme.accent.startsWith('#')
+        const pct = (bytes: number) => { const p = total ? Math.round((bytes / total) * 100) : 0; return bytes && !p ? '<1%' : `${p}%` }
+        const accent = colorOf(theme.accent, termColors, light)
+        const ink = colorOf(theme.fg, termColors, light)
+        const paper = termColors.bg ?? (theme.bg ? colorOf(theme.bg, termColors, light) : light ? [255, 255, 255] as Rgb : [24, 24, 24] as Rgb)
+        const muted = colorOf(theme.muted || 'ansi256(8)', termColors, light)
+        const hex = (c: Rgb) => `#${c.map(v => Math.round(v).toString(16).padStart(2, '0')).join('')}`
+        const inks = [ink, paper, colorOf('ansi256(15)', termColors, light), colorOf('ansi256(0)', termColors, light)]
+        const known = shade || Boolean(termColors.bg)
+        const dimmed = (tile: Tile) => tile.path.startsWith(REST) || (!t.showHidden && tile.name.startsWith('.')) || isIgnored(t.root, tile.path)
+        const boxOf = (tile: Tile) => {
+          if (!dimmed(tile)) return boxLook(paper, accent, inks, tile.depth, total ? tile.bytes / total : 0)
+          const fill = over(paper, muted, 0.3)
+          return { fill, ink: inkOn(fill, inks) }
+        }
+        const heat = (tile: Tile, picked: boolean) => {
+          const hot = lit.find(f => inside(tile.path, f))
+          const warm = !hot && tile.parent ? lit.find(f => inside(tile.parent?.path ?? '', f)) : undefined
+          const from = hot ?? warm
+          const tone = from ? colorOf(tones[t.flashTones[from] ?? 'orange']?.solid ?? theme.accent, termColors, light) : undefined
+          const lift: [Rgb, number] | undefined = picked ? [ink, 0.85] : hot && tone ? [tone, 0.8] : tone ? [paper, 0.35] : undefined
+          return { tone, lift }
+        }
+        const look = (tile: Tile) => {
+          const picked = tile === pick
+          const { tone, lift } = heat(tile, picked)
+          if (lift) {
+            const fill = over(lift[0] === paper && tone ? over(paper, tone, 0.8) : paper, lift[0], lift[1])
+            const c = hex(readable(fill, 1, ink, paper))
+            return { name: c, size: c, bold: true, bg: hex(fill), rank: picked ? 2 : 1 }
+          }
+          if (known) {
+            const box = boxOf(tile)
+            const c = hex(box.ink)
+            return { name: c, size: c, bold: true, bg: hex(box.fill), rank: 0 }
+          }
+          const top = !dimmed(tile) && !(tile.depth % 2)
+          return { name: top ? 'ansi256(0)' : 'ansi256(15)', size: top ? 'ansi256(0)' : 'ansi256(15)', bold: true, bg: top ? 'ansi256(4)' : 'ansi256(8)', rank: 0 }
+        }
+        const amount = scan.loc ? formatLoc : formatSize
+        status = pick ? `${pick.name} ${amount(pick.bytes)} ${pct(pick.bytes)}` : `${amount(total)}${scan.loc ? ' lines' : ''}${scan.done ? '' : ' …'}`
+        const sized = (x: Tile) => `${amount(x.bytes)} ${pct(x.bytes)}`
+        const pixels = Image && !imageDenied && (treemapSetting === 'image' || (treemapSetting === 'auto' && kittyTerm))
+        if (pixels && tiles.length) {
+          const cell = cellPx ?? { cw: 10, ch: 20 }
+          const k = (Math.max(1, Math.round((cell.ch * 0.75) / 16)) * 16) / 0.75 / cell.ch
+          const fit = fitPixels(cols, peekRows, cell.cw * k, cell.ch * k)
+          const cw = (cell.cw * k) / fit.scale
+          const ch = (cell.ch * k) / fit.scale
+          const boxes = layoutPixels(scan.items, fit.width, fit.height, cw, ch, textHeight(ch))
+          const under = new Map<Tile, Rgb>()
+          const pixelLook = (tile: Tile): PixelLook => {
+            const picked = tile.path === mapPick
+            const { lift } = heat(tile, picked)
+            const dim = dimmed(tile)
+            const box = lift ? null : boxOf(tile)
+            const seen = box ? box.fill : over((tile.parent && under.get(tile.parent)) || paper, lift?.[0] ?? accent, lift?.[1] ?? 1)
+            under.set(tile, seen)
+            return { fill: seen, alpha: 1, ink: box ? box.ink : readable(seen, 1, ink, paper), bold: true, rank: lift ? (picked ? 2 : 1) : 0, dim }
+          }
+          const looks = boxes.map(pixelLook)
+          const key = JSON.stringify([fit, ink, boxes.map((b, i) => [b.path, b.x0, b.y0, b.x1, b.y1, sized(b), looks[i]])])
+          if (mapImage?.key !== key) {
+            const byTile = new Map(boxes.map((b, i) => [b, looks[i] as PixelLook]))
+            mapImage = { key, png: png(paint(boxes, fit.width, fit.height, ch, b => byTile.get(b) as PixelLook, sized), fit.width, fit.height).toBase64() }
+          }
+          const zone: ZoneProps = { columns: cols, rows: peekRows, boxes: boxes.map(b => [b.path, b.x0 / cw, b.y0 / ch, b.x1 / cw, b.y1 / ch]) }
+          if (!imageChecked) {
+            imageChecked = true
+            $.clock.after(300, () => void $.ui.blit({ requestId: PANE, key: 'treemap-image', source: { png: mapImage?.png ?? '' } }).then(r => {
+              if (r.deny && /alt/i.test(r.deny)) {
+                imageDenied = true
+                $.ui.invalidate('ui.render')
+              }
+              if (r.deny) imageChecked = false
+            }))
+          }
+          content = (
+            <Box key="treemap-box" position="relative" height={peekRows} width={cols}>
+              <Image key="treemap-image" source={{ png: mapImage.png }} columns={cols} rows={peekRows} alt=" " />
+              <Box position="absolute" top={0} left={0}>
+                <Client key="treemap" module="./zone.tsx" props={zone} />
+              </Box>
+            </Box>
+          )
+        } else content = tiles.length
+          ? <Client key="treemap" module="./rows.tsx" props={{ rows: draw(tiles, cols, peekRows, look, sized), active: '', ...rowColors, pointer } satisfies RowsProps} />
+          : <Text {...mutedText}>{scan.done ? 'empty' : 'sizing…'}</Text>
+      } else if (!target) content = <Text {...mutedText}>no file selected</Text>
+      else if (pic) {
+        if (pic.state === 'ready' && Image) {
+          const fit = fitCells(pic, Math.max(1, e.props.bodyColumns - 1), peekRows)
+          status = isDoc ? `p ${page}/${pic.pages ?? '?'}` : `${pic.width}×${pic.height}`
+          content = <Image key="peek-image" source={{ file: pic.file, format: 'png', generation: pic.generation }} columns={fit.columns} rows={fit.rows} alt={name} />
+        } else content = <Text {...mutedText}>{pic.state === 'pending' ? 'decoding…' : pic.state === 'failed' ? pic.note : 'images show in the terminal'}</Text>
+      } else {
+        if (isDoc && (peeked?.path !== target || (docKind === 'pdf' && peeked.page !== page))) {
+          const want = `${target}\0${page}`
+          if (docReading !== want) {
+            docReading = want
+            $.clock.after(0, () => void readPreview($, target, page).then(p => {
+              if (docReading !== want) return
+              docReading = ''
+              if (peekPath === target) {
+                peeked = p
+                peekTop = 0
+              }
+              void $.ui.invalidate('ui.render')
+            }, () => {
+              if (docReading === want) docReading = ''
+            }))
+          }
+          if (peeked?.path !== target) peeked = { path: target, text: '', note: 'reading…', page }
+        } else if (peeked?.path !== target) peeked = await readPreview($, target)
+        const lines = peeked.text.split('\n')
+        const last = Math.max(0, lines.length - peekRows)
+        start = Math.min(start, last)
+        const markdown = /\.(md|markdown|mdx|docx|odt|rtf)$/i.test(target)
+        const win = previewLines(peeked.text, start, peekRows, markdown)
+        status = `${docKind === 'pdf' ? `p ${page}${docCounts.has(target) ? `/${docCounts.get(target)}` : ''} ` : ''}${peeked.text ? `${start + 1}–${Math.min(lines.length, start + peekRows)}/${lines.length}` : ''}`.trim()
+        const size = Math.max(1, Math.round((peekRows * peekRows) / Math.max(1, lines.length)))
+        const bar = lines.length > peekRows ? { pos: last ? Math.round((start / last) * (peekRows - size)) : 0, size, thumb: theme.accent, track: theme.muted } : undefined
+        if (!peeked.text) overPeek = false
+        content = peeked.text
+          ? <Client key="peek" module="./rows.tsx" props={{ rows: [], active: '', ...rowColors, pointer, ...(bar ? { bar } : {}), preview: { text: win.text, path: target, startLine: win.top + 1, markdown, rows: peekRows } } satisfies RowsProps} />
+          : <Text {...mutedText}>{raw?.state === 'pending' ? 'converting…' : peeked.note || 'empty file'}</Text>
+      }
+      const title = (
+        <Box key="peek-title" flexDirection="row" height={1} overflow="hidden">
+          <Box flexShrink={1} flexGrow={1} overflow="hidden">
+            {anchor && anchor !== t.root && !target ? (
+              <Button key="map-up" plain label={`${glyphSetting === 'text' ? 'up ' : unicode ? '↑ ' : '\u{eaa1} '}${name}`} onPress={() => void mapUp($, anchor)} />
+            ) : (
+              <Text bold wrap="truncate-start">{name}</Text>
+            )}
+          </Box>
+          {status ? <Box flexShrink={0}><Text {...mutedText}>{` ${status}`}</Text></Box> : null}
+          {peeked?.note && peeked.text && !pic ? <Text {...mutedText}>{' partial'}</Text> : null}
+        </Box>
+      )
+      const box = <Box key="peek-body" flexDirection="column" height={peekRows} overflow="hidden">{content}</Box>
+      return splitAt === 'top'
+        ? <Box key="peek-split" flexDirection="column" flexShrink={0}>{title}{box}{rule}</Box>
+        : <Box key="peek-split" flexDirection="column" flexShrink={0}>{rule}{title}{box}</Box>
+    }
+    const split = await peek()
+
+    const paging = splitShown && Boolean(peekPath) && (pictureKind(peekPath) === 'pdf' || (pictureKind(peekPath) === 'office' && Boolean(Image) && !imageDenied && !inTmux && !inHerdr))
+    const park = () => focusPane($, t.root, paging ? 'rows' : treeKey())
+    const footerName = footer === t.root ? t.root.split('/').filter(Boolean).pop() || t.root : footer ? (inside(t.root, footer) ? footer.slice(t.root.endsWith('/') ? t.root.length : t.root.length + 1) : shortPath(footer)) : ''
+    const allKeys: { key: string; label: string; act: () => void }[] = [
+      { key: 'jkhl', label: 'move', act: () => undefined },
+      { key: 'o', label: 'open', act: () => void navigate($, 'return') },
+      { key: 'd', label: 'diff', act: () => void navigate($, 'd') },
+      { key: 's', label: 'search', act: () => focusPane($, t.root, 'q') },
+      ...(e.surface === 'desktop' ? [] : [{ key: 'p', label: 'preview', act: () => void navigate($, 'p', false, e.surface).then(park) }]),
+      { key: 'y', label: 'copy path', act: () => void navigate($, 'y', false, e.surface).then(park) },
+      ...(paging ? [{ key: '[ ]', label: 'page', act: () => void (turnPage($, 1), park()) }] : []),
+      ...(shortcutsSetting === 'auto' ? [{ key: '?', label: 'hide', act: () => undefined }] : []),
+    ]
+    const picked = new Set<string>()
+    if (shortcutsShown) {
+      let room = width - (footerName ? 12 + Math.min(footerName.length, 6) : 0) - (latest ? 6 + latest.label.length : 0)
+      for (const key of ['?', 'jkhl', '[ ]', 'd', 'o', 's', 'p', 'y']) {
+        const k = allKeys.find(x => x.key === key)
+        if (!k) continue
+        const w = (key === 'jkhl' ? 7 : key.length) + k.label.length + 4
+        if (w > room) continue
+        room -= w
+        picked.add(key)
+      }
+    }
+    const keys = allKeys.filter(k => picked.has(k.key))
+    const hidden: [string, () => void][] = [
+      ...(['j', 'k', 'h', 'l'] as const).map(k => [k, () => void navigate($, k).then(park)] as [string, () => void]),
+      ...allKeys.filter(k => k.key.length === 1 && k.key !== '?' && !picked.has(k.key)).map(k => [k.key, k.act] as [string, () => void]),
+    ]
 
     return (
       <Box flexDirection="column" minHeight={Math.max(1, e.props.scroll?.bodyRows ?? 1)} backgroundColor={theme.bg || undefined}>
         <Box flexDirection="row">
-          <Text bold color={theme.accent} wrap="truncate-start">
-            {header}
-          </Text>
+          <Box flexDirection="row" flexShrink={1} overflow="hidden" backgroundColor={t.cursor === t.root ? rowColors.activeBg || undefined : undefined}>
+            <Button key="root" plain onPress={() => void selectRoot($).then(() => focusPane($, t.root, treeKey()))}>
+              <Text color={theme.accent}>{`${rootGlyph} `}</Text>
+              <Text bold color={theme.accent}>{header}</Text>
+            </Button>
+          </Box>
           <Box flexGrow={1} />
-          {hint(buttons, header.length)}
+          {hint(buttons, header.length + 2)}
           <Box flexDirection="row" gap={1}>
             {buttons.map(button)}
             <Text> </Text>
           </Box>
         </Box>
+        {splitAt === 'top' ? split : null}
         {branchRow()}
-        {!t.top && showHints && <Text color={theme.muted}>{unicode ? '± ' : '\u{e702} '}no git repo · git status starts after git init</Text>}
+        {!t.top && showHints && <Text {...mutedText}>{unicode ? '± ' : '\u{e702} '}no git repo, git status starts after git init</Text>}
         {searchGap ? <Text key="gap-above"> </Text> : null}
         <Box flexDirection="row">
+          {glyphSetting === 'text' ? null : <Text {...mutedText}>{unicode ? '⌕ ' : '\u{ea6d} '}</Text>}
           <Box flexGrow={1}>
             <Input
               key="q"
@@ -1749,37 +2614,47 @@ export const register: Register = (on, options) => {
               onSubmit={(v: string) => void jump($, v).then(() => $.clock.after(100, park))}
             />
           </Box>
-          {t.query ? <Button key="clear" plain dimColor label={unicode ? '×' : '\u{f0156}'} onPress={() => void search($, '')} /> : null}
+          {t.query ? <Button key="clear" plain dimColor label={unicode ? '×' : '\u{ea76}'} onPress={() => void search($, '')} /> : null}
         </Box>
         {searchGap ? <Text key="gap-below"> </Text> : null}
-        {showShortcuts ? (
-        <Box flexDirection="row" gap={2}>
-          {([['j', '↓', '\u{f0045}'], ['k', '↑', '\u{f005d}'], ['h', '←', '\u{f004d}'], ['l', '→', '\u{f0054}']] as const).map(([k, plain, nerd]) => (
-            <Button key={`nav-${k}`} plain dimColor hotkey={k} label={unicode ? plain : nerd} onPress={() => void navigate($, k).then(park)} />
-          ))}
-          <Button key="nav-o" plain dimColor autoFocus hotkey="o" label={unicode ? 'open' : '\u{f03cb} open'} onPress={() => void navigate($, 'return')} />
-          <Button key="nav-s" plain dimColor hotkey="s" label={unicode ? 'search' : '\u{f0349} search'} onPress={() => void $.ui.focus({ requestId: PANE, key: 'q' })} />
-        </Box>
-        ) : null}
         <Client
           key="rows"
           module="./rows.tsx"
           props={{ rows: specs, active: t.cursor, ...rowColors, pointer, ...(bar ? { bar } : {}) } satisfies RowsProps}
         />
         <Box flexGrow={1} />
-        {(t.selected || latest) && (
-          <Box flexDirection="row">
-            {t.selected ? (
-              <Box flexShrink={1}>
-                <Text dimColor={!light} color={light ? theme.muted : undefined} wrap="truncate-start">
-                  selected: {t.selected !== t.root && inside(t.root, t.selected) ? t.selected.slice(t.root.endsWith('/') ? t.root.length : t.root.length + 1) : shortPath(t.selected)}
-                </Text>
+        {splitAt === 'bottom' ? split : null}
+        {(footer || latest || shortcutsShown || shortcutsSetting === 'auto') && (
+          <Box flexDirection="row" height={1} overflow="hidden">
+            {keys.length ? (
+              <Box flexDirection="row" flexShrink={0} gap={2}>
+                {keys.map(k => k.key === 'jkhl'
+                  ? <Text key="nav-move" dimColor><Text color={theme.accent}>j k h l</Text>: move</Text>
+                  : k.key === '[ ]'
+                  ? <Button key="nav-page" plain dimColor label={`[ ]: ${k.label}`} onPress={k.act}><Text color={theme.accent}>[ ]</Text>{`: ${k.label}`}</Button>
+                  : k.key === '?'
+                  ? <Button key="nav-help" plain dimColor label={`?: ${k.label}`} onPress={() => { toggleShortcuts($); park() }}><Text color={theme.accent}>?</Text>{`: ${k.label}`}</Button>
+                  : <Button key={`nav-${k.key}`} plain dimColor autoFocus={k.key === 'o' && shortcutsSetting === 'always' ? true : undefined} hotkey={k.key} label={k.label} onPress={k.act} />)}
+              </Box>
+            ) : shortcutsSetting === 'auto' ? (
+              <Box flexShrink={0}>
+                <Button key="nav-help" plain dimColor label="?: shortcuts" onPress={() => { toggleShortcuts($); park() }}><Text color={theme.accent}>?</Text>: shortcuts</Button>
               </Box>
             ) : null}
             <Box flexGrow={1} />
             {latest && chip(latest)}
+            {footerName ? <Box flexShrink={0} marginLeft={2}><Text {...mutedText}>selected: </Text></Box> : null}
+            {footerName ? (
+              <Box flexShrink={1}>
+                <Text {...mutedText} wrap="truncate-start">{footerName}</Text>
+              </Box>
+            ) : null}
           </Box>
         )}
+        <Box key="hotkeys" height={0} overflow="hidden" flexDirection="row">
+          {shortcutsSetting === 'always' ? null : <Button key="hk-tree" plain autoFocus label="o" onPress={() => void navigate($, 'return')} />}
+          {hidden.map(([k, act]) => <Button key={`hk-${k}`} plain hotkey={k} label={k} onPress={act} />)}
+        </Box>
       </Box>
     )
   })

@@ -8,19 +8,10 @@ const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'bas
 
 export const DEFAULT_THEME: Theme = {
   fg: '',
-  accent: '#5b9bd5',
-  muted: '#808a96',
-  urgent: '#d0605e',
-  selection: '#6b7280',
-  bg: '',
-}
-
-export const LIGHT_THEME: Theme = {
-  fg: '',
-  accent: '#1e3a8a',
-  muted: '#374151',
-  urgent: '#7f1d1d',
-  selection: '#e2e6ec',
+  accent: 'ansi256(4)',
+  muted: '',
+  urgent: 'ansi256(1)',
+  selection: 'ansi256(0)',
   bg: '',
 }
 
@@ -33,7 +24,7 @@ export function emptyTree(root: string): FileTree {
     selected: '',
     query: '',
     showHidden: true,
-    showSize: false,
+    column: 'date',
     dirSizes: {},
     git: {},
     diff: {},
@@ -50,18 +41,7 @@ export function emptyTree(root: string): FileTree {
     scroll: null,
     preview: '',
     previewTop: 0,
-  }
-}
-
-export function parseTheme(toml: string): Theme {
-  const get = (k: string) => toml.match(new RegExp(`^${k}\\s*=\\s*"(#[0-9a-fA-F]{6})"`, 'm'))?.[1]
-  return {
-    fg: get('foreground') ?? get('color7') ?? DEFAULT_THEME.fg,
-    accent: get('accent') ?? get('color4') ?? DEFAULT_THEME.accent,
-    muted: get('muted') ?? get('color8') ?? DEFAULT_THEME.muted,
-    urgent: get('red') ?? get('color1') ?? DEFAULT_THEME.urgent,
-    selection: get('selection') ?? DEFAULT_THEME.selection,
-    bg: get('dark_background') ?? get('background') ?? DEFAULT_THEME.bg,
+    split: false,
   }
 }
 
@@ -342,13 +322,12 @@ export function age(ms: number, now: number): string {
 
 export function formatSize(bytes: number): string {
   if (bytes < 0) return '?'
-  if (bytes < 1024) return `${bytes} B`
-  const units = ['K', 'M', 'G', 'T']
-  let v = bytes / 1024
+  const units = ['B', 'K', 'M', 'G', 'T']
+  let v = bytes
   let i = 0
-  while (v >= 1024 && i < units.length - 1) {
+  while (Math.round(v) >= 1000 && i < units.length - 1) {
     v /= 1024
     i++
   }
-  return `${v < 100 ? v.toFixed(1) : Math.round(v)} ${units[i]}`
+  return `${i && v < 9.95 ? v.toFixed(1) : Math.round(v)}${units[i]}`
 }

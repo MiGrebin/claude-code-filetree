@@ -22,10 +22,37 @@ export const LINUX_OPEN = [
   'exec xdg-open "$f"',
 ].join('\n')
 
-export const TMUX_OPEN = [
+export type Target = 'auto' | 'pane right' | 'pane below' | 'tab' | 'workspace'
+
+export const TARGETS: readonly Target[] = ['auto', 'pane right', 'pane below', 'tab', 'workspace']
+
+export function terminalTarget(value: unknown): Target {
+  return TARGETS.find(t => t === value) ?? 'auto'
+}
+
+const TMUX_SWITCH = 'tmux set-option -t "$s" detach-on-destroy off >/dev/null && { tmux switch-client -t "$s" || { tmux kill-session -t "$s"; exit 1; }; }; exit'
+
+const TMUX_LAUNCH: Record<Target, string> = {
+  auto: 'exec tmux new-window -c "$d" -- "$@" ${n:+"+$n"} "$f"',
+  tab: 'exec tmux new-window -c "$d" -- "$@" ${n:+"+$n"} "$f"',
+  'pane right': 'exec tmux split-window -h -c "$d" -- "$@" ${n:+"+$n"} "$f"',
+  'pane below': 'exec tmux split-window -v -c "$d" -- "$@" ${n:+"+$n"} "$f"',
+  workspace: `s=$(tmux new-session -d -P -F '#{session_id}' -c "$d" -- "$@" \${n:+"+$n"} "$f") && ${TMUX_SWITCH}`,
+}
+
+export const TMUX_WORKSPACE = `d=$1; shift; s=$(tmux new-session -d -P -F '#{session_id}' -c "$d" -- "$@") && ${TMUX_SWITCH}`
+
+export function tmuxCommand(target: Target, dir: string, argv: string[]): string[] {
+  if (target === 'workspace') return ['sh', '-c', TMUX_WORKSPACE, 'sh', dir, ...argv]
+  const how = target === 'pane right' ? ['split-window', '-h'] : target === 'pane below' ? ['split-window', '-v'] : ['new-window']
+  return ['tmux', ...how, '-c', dir, '--', ...argv]
+}
+
+function tmuxOpener(target: Target) {
+  return [
   'f=$1 d=$2 n=$3; shift 3',
   'bin=$1',
-  'case ${bin##*/} in nvim) ;; *) exec tmux new-window -c "$d" -- "$@" ${n:+"+$n"} "$f" ;; esac',
+  `case \${bin##*/} in nvim) ;; *) ${TMUX_LAUNCH[target]} ;; esac`,
   'probe() {',
   '  "$bin" --server "$s" --remote-expr \'$TMUX . " " . $TMUX_PANE\' 2>/dev/null &',
   '  request=$!',
@@ -52,35 +79,39 @@ export const TMUX_OPEN = [
   '  [ -z "$n" ] || "$bin" --server "$best" --remote-send "<C-\\><C-N>:$n<CR>"',
   '  exec tmux select-window -t "$pane" \\; select-pane -t "$pane"',
   'fi',
-  'exec tmux new-window -c "$d" -- "$@" ${n:+"+$n"} "$f"',
+  TMUX_LAUNCH[target],
 ].join('\n')
+}
+
+export const TMUX_OPEN = tmuxOpener('auto')
 
 const WIN_OPEN = "$ErrorActionPreference = 'Stop'; [Diagnostics.Process]::Start([Diagnostics.ProcessStartInfo]@{ FileName = $env:PANE_OPEN_TARGET; UseShellExecute = $true }) | Out-Null"
 
-export function tmuxOpenCommand(editor: string, target: string, line?: number) {
+export function tmuxOpenCommand(editor: string, target: string, line?: number, where: Target = 'auto') {
   const argv = words(editor)
   if (!argv[0]) throw new Error('Editor command is empty')
   const dir = target.slice(0, target.lastIndexOf('/')) || '/'
   return {
-    argv: ['sh', '-c', TMUX_OPEN, 'sh', target, dir, line ? String(line) : '', ...argv],
+    argv: ['sh', '-c', where === 'auto' ? TMUX_OPEN : tmuxOpener(where), 'sh', target, dir, line ? String(line) : '', ...argv],
     init: { timeoutMs: 10_000 },
   }
 }
 
-export function herdrOpenCommand(herdr: string, editor: string, target: string, line?: number) {
+export function herdrOpenCommand(herdr: string, editor: string, target: string, line?: number, where: Target = 'auto', workspace = '') {
   const argv = words(editor)
   if (!argv[0]) throw new Error('Editor command is empty')
   const dir = target.slice(0, target.lastIndexOf('/')) || '/'
   const command = [...argv, ...(line ? [`+${line}`] : [])].map(w => `'${w.replace(/'/g, "'\\''")}'`).join(' ')
   return {
-    split: [herdr, 'pane', 'split', '--current', '--direction', 'right', '--focus', '--cwd', dir, '--env', `PANE_OPEN_TARGET=${target}`],
+    split: [herdr, ...(where === 'tab' ? ['tab', 'create', ...(workspace ? ['--workspace', workspace] : [])] : where === 'workspace' ? ['workspace', 'create'] : ['pane', 'split', '--current', '--direction', where === 'pane below' ? 'down' : 'right']), '--focus', '--cwd', dir, '--env', `PANE_OPEN_TARGET=${target}`],
     run: (pane: string) => [herdr, 'pane', 'run', pane, `exec ${command} "$PANE_OPEN_TARGET"`],
     init: { timeoutMs: 10_000 },
   }
 }
 
 export function herdrPane(stdout: string): string {
-  const id: unknown = JSON.parse(stdout)?.result?.pane?.pane_id
+  const result = JSON.parse(stdout)?.result
+  const id: unknown = (result?.pane ?? result?.root_pane)?.pane_id
   if (typeof id !== 'string' || !id) throw new Error('herdr returned no pane id')
   return id
 }

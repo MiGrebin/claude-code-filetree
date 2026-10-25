@@ -1,6 +1,6 @@
 {
   "name": "filetree",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "An IDE-style file tree for Claude Code that shows what Claude is doing and where in files",
   "types": "./types/index.d.ts",
   "author": {
@@ -29,12 +29,13 @@
     "glyphs": {
       "type": "string",
       "title": "Glyphs",
-      "description": "Icon set: auto uses Nerd Font icons when one is installed here, except in the desktop app; plain uses Unicode only",
+      "description": "Icon set: auto uses Nerd Font icons when one is installed here, except in the desktop app; plain uses Unicode only; text is plain with the header buttons as words (up, cwd, sync, dots, size, fold, split, clear), falling back to plain glyphs when the pane is too narrow",
       "default": "auto",
       "options": [
         "auto",
         "nerd",
-        "plain"
+        "plain",
+        "text"
       ]
     },
     "follow": {
@@ -60,12 +61,13 @@
     "column": {
       "type": "string",
       "title": "Right column",
-      "description": "What the right column shows by default: date (last modified), age (time since last modified, short: now, 12m, 3h, 5d, then Oct 9 past a week and the year past a year) or size (files in bytes, folders as disk usage computed in the background). The header button toggles between size and the date or age.",
+      "description": "What the right column shows by default: date (last modified), age (time since last modified, short: now, 12m, 3h, 5d, then Oct 9 past a week and the year past a year), size (files in bytes, folders as disk usage computed in the background) or loc (non-blank lines in code, markup, config and docs files, folders as the sum, counted in the background; pictures, video, binaries and data files show nothing). The header button cycles the date or age, size and loc; in loc the treemap sizes boxes by lines.",
       "default": "date",
       "options": [
         "date",
         "age",
-        "size"
+        "size",
+        "loc"
       ]
     },
     "hints": {
@@ -91,10 +93,11 @@
     "shortcuts": {
       "type": "string",
       "title": "Shortcut row",
-      "description": "on: the j/k/h/l/open/search row under the search bar. off: the row is hidden and the tree gets it; the keys still work with the tree focused.",
-      "default": "on",
+      "description": "auto: the footer shows a ?: shortcuts hint until you press ? in the tree, then the shortcuts show at the left of the footer row for 10 seconds, the selected entry staying at the right; ? again hides them. always: they always show. off: they never show. The keys work in every mode with the tree focused.",
+      "default": "auto",
       "options": [
-        "on",
+        "auto",
+        "always",
         "off"
       ]
     },
@@ -126,11 +129,46 @@
       "description": "What d does on a changed file, in the tree or the preview. Empty: show its diff against HEAD in the pane, drawn by Claude Code's own diff view (an untracked file shows as all added; d again goes back to the file). Anything else is a terminal command, run on the file in a tmux window, a herdr pane or, on Linux, a new terminal window through xdg-terminal-exec, the file path going last. Examples: hunk diff --, lazygit -f, git difftool -y --, nvim -c Gvdiffsplit.",
       "default": ""
     },
+    "target": {
+      "type": "string",
+      "title": "Terminal target",
+      "description": "Where Open with: editor, e in the preview and a Diff with command start their terminal program inside tmux or herdr. auto: a new tmux window, or a herdr pane split to the right. pane right and pane below split the current pane; tab opens a tmux window or a herdr tab; workspace opens a new tmux session and switches to it, or a new herdr workspace. In tmux, nvim already running in the session is reused wherever it is.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "pane right",
+        "pane below",
+        "tab",
+        "workspace"
+      ]
+    },
     "ignore": {
       "type": "string",
       "title": "Ignore",
       "description": "File and folder names to leave out of the tree, its search and its shimmer, separated by spaces or commas. Names match exactly, without wildcards, at any depth, like the built-in .git and node_modules. Example: .cache .tmp",
       "default": ""
+    },
+    "split": {
+      "type": "string",
+      "title": "Preview pane",
+      "description": "Where the split preview of the file under the cursor sits when the header button or p shows it: bottom (under the tree, above the status line) or top (under the header). It starts hidden; text scrolls with the wheel over it, f/b or Page Up/Down, images, video poster frames and PDF or office document pages draw through the kitty graphics protocol in terminals that support it, and [ and ] turn a document's pages.",
+      "default": "bottom",
+      "options": [
+        "bottom",
+        "top"
+      ]
+    },
+    "treemap": {
+      "type": "string",
+      "title": "Treemap",
+      "description": "What the split preview shows on a folder. auto: a pixel-accurate treemap through the kitty graphics protocol in Ghostty and kitty, outside tmux and herdr, and the cell treemap everywhere else. image: try the pixel treemap in any terminal, falling back to cells where it cannot show, as inside tmux. cells: always the cell treemap. off: no treemap and no disk usage scans.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "image",
+        "cells",
+        "off"
+      ]
     },
     "palette": {
       "type": "string",

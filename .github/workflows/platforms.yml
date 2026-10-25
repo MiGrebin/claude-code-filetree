@@ -26,8 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install Claude Code 2.1.287
-        run: npm install -g @anthropic-ai/claude-code@2.1.287 && claude --version
+      - name: Install Claude Code 2.1.306
+        run: npm install -g @anthropic-ai/claude-code@2.1.306 && claude --version
       - name: Validate the plugin and marketplace
         run: claude plugin validate .claude-plugin/plugin.json && claude plugin validate .claude-plugin/marketplace.json
       - name: Plugin tests on this OS
