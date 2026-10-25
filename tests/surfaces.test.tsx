@@ -2485,6 +2485,38 @@ test('tmux workspace: the new session returns to Claude when the program exits a
   expect(TMUX_WORKSPACE).toBe(`d=$1; shift; s=$(tmux new-session -d -P -F '#{session_id}' -c "$d" -- "$@") && tmux set-option -t "$s" detach-on-destroy off >/dev/null && { tmux switch-client -t "$s" || { tmux kill-session -t "$s"; exit 1; }; }; exit`)
 })
 
+test('split preview: a file edited outside Claude shows its new text after the watcher fires', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/opt/k/proj'
+  const w = {
+    os: 'linux' as const, env: { HOME: '/opt/k' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.ts', 'file']] } as Record<string, [string, string][]>,
+    files: { [`${root}/a.ts`]: 'const before = 1\n' } as Record<string, string>,
+    watch: { after: 5_000, change: () => {
+      w.files[`${root}/a.ts`] = 'const after = 2\n'
+      return `${root}/a.ts\n`
+    } },
+  }
+  const clock = world(on, w as any, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await ui.press({ key: 'split' })
+  await clock.settle()
+  await ui.post({ key: 'j' }, { in: 'rows' })
+  await clock.settle()
+  expect(peekOf(await ui.drawn()).preview.text).toContain('const before = 1')
+  await clock.advance(5_000)
+  await clock.settle()
+  await clock.advance(2_000)
+  await clock.settle()
+  const text = peekOf(await ui.drawn()).preview.text
+  expect(text).toContain('const after = 2')
+  expect(text).not.toContain('const before')
+  await ui.unmount()
+})
+
 test('files added and removed outside Claude show in the tree and the treemap without a click', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const root = '/home/k/proj'

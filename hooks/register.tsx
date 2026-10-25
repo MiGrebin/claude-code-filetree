@@ -326,6 +326,7 @@ async function watched($: EngineInterface): Promise<void> {
   watchTimer = null
   const paths = [...watchQueue]
   watchQueue.clear()
+  dropPreviews(paths)
   const t = await get($)
   const open = new Set([t.root, ...openDirs(t)])
   const dirs = [...new Set(paths.map(p => dirname(p)).filter(d => open.has(d)))]
@@ -980,9 +981,14 @@ function scheduleScan($: EngineInterface, job: Job): void {
   })
 }
 
+function dropPreviews(paths: string[]): void {
+  const changed = new Set(paths.map(posix))
+  if (previewed && changed.has(previewed.path)) previewed = null
+  if (peeked && changed.has(peeked.path)) peeked = null
+}
+
 async function touched($: EngineInterface, paths: string[], tone: string, show: boolean): Promise<void> {
-  if (tone !== 'purple' && previewed && paths.map(posix).includes(previewed.path)) previewed = null
-  if (tone !== 'purple' && peeked && paths.map(posix).includes(peeked.path)) peeked = null
+  if (tone !== 'purple') dropPreviews(paths)
   if (tone !== 'purple') markStale($, paths)
   if (await followCwd($)) return
   const t = await get($)
