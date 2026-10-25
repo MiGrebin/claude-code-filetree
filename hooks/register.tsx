@@ -2547,15 +2547,15 @@ export const register: Register = (on, options) => {
     const paging = splitShown && Boolean(peekPath) && (pictureKind(peekPath) === 'pdf' || (pictureKind(peekPath) === 'office' && Boolean(Image) && !imageDenied && !inTmux && !inHerdr))
     const park = () => focusPane($, t.root, paging ? 'rows' : treeKey())
     const footerName = footer === t.root ? t.root.split('/').filter(Boolean).pop() || t.root : footer ? (inside(t.root, footer) ? footer.slice(t.root.endsWith('/') ? t.root.length : t.root.length + 1) : shortPath(footer)) : ''
-    const allKeys: { key: string; label: string; press: () => void }[] = [
-      { key: 'jkhl', label: 'move', press: () => undefined },
-      { key: 'o', label: 'open', press: () => void navigate($, 'return') },
-      { key: 'd', label: 'diff', press: () => void navigate($, 'd') },
-      { key: 's', label: 'search', press: () => focusPane($, t.root, 'q') },
-      ...(e.surface === 'desktop' ? [] : [{ key: 'p', label: 'preview', press: () => void navigate($, 'p', false, e.surface).then(park) }]),
-      { key: 'y', label: 'copy path', press: () => void navigate($, 'y', false, e.surface).then(park) },
-      ...(paging ? [{ key: '[ ]', label: 'page', press: () => void (turnPage($, 1), park()) }] : []),
-      ...(shortcutsSetting === 'auto' ? [{ key: '?', label: 'hide', press: () => undefined }] : []),
+    const allKeys: { key: string; label: string; act: () => void }[] = [
+      { key: 'jkhl', label: 'move', act: () => undefined },
+      { key: 'o', label: 'open', act: () => void navigate($, 'return') },
+      { key: 'd', label: 'diff', act: () => void navigate($, 'd') },
+      { key: 's', label: 'search', act: () => focusPane($, t.root, 'q') },
+      ...(e.surface === 'desktop' ? [] : [{ key: 'p', label: 'preview', act: () => void navigate($, 'p', false, e.surface).then(park) }]),
+      { key: 'y', label: 'copy path', act: () => void navigate($, 'y', false, e.surface).then(park) },
+      ...(paging ? [{ key: '[ ]', label: 'page', act: () => void (turnPage($, 1), park()) }] : []),
+      ...(shortcutsSetting === 'auto' ? [{ key: '?', label: 'hide', act: () => undefined }] : []),
     ]
     const picked = new Set<string>()
     if (shortcutsShown) {
@@ -2572,7 +2572,7 @@ export const register: Register = (on, options) => {
     const keys = allKeys.filter(k => picked.has(k.key))
     const hidden: [string, () => void][] = [
       ...(['j', 'k', 'h', 'l'] as const).map(k => [k, () => void navigate($, k).then(park)] as [string, () => void]),
-      ...allKeys.filter(k => k.key.length === 1 && k.key !== '?' && !picked.has(k.key)).map(k => [k.key, k.press] as [string, () => void]),
+      ...allKeys.filter(k => k.key.length === 1 && k.key !== '?' && !picked.has(k.key)).map(k => [k.key, k.act] as [string, () => void]),
     ]
 
     return (
@@ -2624,10 +2624,10 @@ export const register: Register = (on, options) => {
                 {keys.map(k => k.key === 'jkhl'
                   ? <Text key="nav-move" dimColor><Text color={theme.accent}>j k h l</Text>: move</Text>
                   : k.key === '[ ]'
-                  ? <Button key="nav-page" plain dimColor label={`[ ]: ${k.label}`} onPress={k.press}><Text color={theme.accent}>[ ]</Text>{`: ${k.label}`}</Button>
+                  ? <Button key="nav-page" plain dimColor label={`[ ]: ${k.label}`} onPress={k.act}><Text color={theme.accent}>[ ]</Text>{`: ${k.label}`}</Button>
                   : k.key === '?'
                   ? <Button key="nav-help" plain dimColor label={`?: ${k.label}`} onPress={() => { toggleShortcuts($); park() }}><Text color={theme.accent}>?</Text>{`: ${k.label}`}</Button>
-                  : <Button key={`nav-${k.key}`} plain dimColor autoFocus={k.key === 'o' && shortcutsSetting === 'always' ? true : undefined} hotkey={k.key} label={k.label} onPress={k.press} />)}
+                  : <Button key={`nav-${k.key}`} plain dimColor autoFocus={k.key === 'o' && shortcutsSetting === 'always' ? true : undefined} hotkey={k.key} label={k.label} onPress={k.act} />)}
               </Box>
             ) : shortcutsSetting === 'auto' ? (
               <Box flexShrink={0}>
@@ -2646,7 +2646,7 @@ export const register: Register = (on, options) => {
         )}
         <Box key="hotkeys" height={0} overflow="hidden" flexDirection="row">
           {shortcutsSetting === 'always' ? null : <Button key="hk-tree" plain autoFocus label="o" onPress={() => void navigate($, 'return')} />}
-          {hidden.map(([k, press]) => <Button key={`hk-${k}`} plain hotkey={k} label={k} onPress={press} />)}
+          {hidden.map(([k, act]) => <Button key={`hk-${k}`} plain hotkey={k} label={k} onPress={act} />)}
         </Box>
       </Box>
     )
