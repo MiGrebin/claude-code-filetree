@@ -108,7 +108,9 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
     return (
       <Column flexDirection="row" height={p.rows} overflow="hidden">
         <Column flexGrow={1} flexShrink={1} flexDirection="column" overflow="hidden">
-          {body}
+          <Column flexShrink={0} flexDirection="column">
+            {body}
+          </Column>
         </Column>
         {bar ? (
           <Column flexDirection="column" flexShrink={0}>
