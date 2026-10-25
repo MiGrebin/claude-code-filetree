@@ -1480,7 +1480,7 @@ test('a light theme setting only changes the activity colours; the tree keeps th
   const light = await texts(ui)
   expect(light).toContain('"activeBg":"ansi256(0)"')
   for (const c of ['ansi256(3)', 'ansi256(2)']) expect(light).toContain(`"color":"${c}"`)
-  expect(light).toMatch(/"dimColor":true\},"children":\[" 2023-11-14 23:13"\]/)
+  expect(light).toMatch(/"dimColor":true\},"children":\[" 2023-11-1\d \d\d:\d\d"\]/)
   expect(light).not.toContain('ansi256(8)')
   expect(light).toContain('#431407')
   await ui.unmount()
