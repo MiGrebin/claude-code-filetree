@@ -2054,9 +2054,9 @@ test('split preview: a PDF draws its page as a picture with p N/M, prefetches th
 
 test('split preview: the header button shows the file under the cursor below a rule, the wheel, Page Down, f and End scroll it with a scrollbar, pictures draw as images, and the button hides it', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
-  const root = '/home/k/proj'
+  const root = '/opt/k/proj'
   const clock = world(on, {
-    os: 'linux', env: { HOME: '/home/k', XDG_RUNTIME_DIR: '/run/user/1000' }, cwd: root, top: '', status: '', numstat: '',
+    os: 'linux', env: { HOME: '/opt/k', XDG_RUNTIME_DIR: '/run/user/1000' }, cwd: root, top: '', status: '', numstat: '',
     dirs: { [root]: [['a.ts', 'file'], ['b.png', 'file'], ['c.mp4', 'file']], '/run/user/1000/filetree-preview-1000/test-session': [['0123456789abcdef.png', 'file']] },
     files: { [`${root}/a.ts`]: `const a = 1\n${'a++\n'.repeat(200)}` },
     stdout: { 'od -An -tu1': PNG_HEAD, [`sh -c ${POSTER}`]: '/run/user/1000/filetree-preview-1000/test-session/0123456789abcdef.png' },
