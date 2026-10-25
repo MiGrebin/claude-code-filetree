@@ -2101,6 +2101,7 @@ export const register: Register = (on, options) => {
     const light = e.surface !== 'desktop' && lightTerminal
     const theme: Theme = { ...DEFAULT_THEME, ...palette.theme }
     const tones = light ? LIGHT_TONES : TONES
+    const mutedText = theme.muted ? { color: theme.muted } : { dimColor: true }
     const gitColors = { ...GIT_COLOR, ...palette.git }
     const addColor = palette.add ?? ADD_COLOR
     const delColor = palette.del ?? DEL_COLOR
@@ -2115,7 +2116,7 @@ export const register: Register = (on, options) => {
       const text = buttons.find(b => b.id === hovered)?.hint
       if (!text) return null
       const room = e.props.bodyColumns - title - buttons.reduce((w, b) => w + b.label.length + (e.surface === 'desktop' ? 2 : 1), 0) - 2
-      return text.length <= room ? <Text color={theme.muted}>{`${text} `}</Text> : null
+      return text.length <= room ? <Text {...mutedText}>{`${text} `}</Text> : null
     }
     if (t.preview) {
       if (previewed?.path !== t.preview) await loadPreview($, t.preview)
@@ -2148,7 +2149,7 @@ export const register: Register = (on, options) => {
             <Button key="pv-d" plain dimColor hotkey="d" label={p?.diff ? (t.nodes.find(n => n.id === t.preview)?.kind === 'dir' ? 'tree' : 'file') : 'diff'} onPress={() => void diffFile($, t.preview)} />
             {editWithSetting || inTmux || inHerdr ? <Button key="edit" plain dimColor autoFocus hotkey="e" label={`${unicode ? 'edit' : '\u{ea73} edit'} :${previewLine}`} onPress={() => void editPreview($, t.preview)} /> : null}
           </Box>
-          {p?.note ? <Text dimColor={!light} color={light ? theme.muted : undefined}>{p.note}</Text> : null}
+          {p?.note ? <Text {...mutedText}>{p.note}</Text> : null}
           <Client
             key="rows"
             module="./rows.tsx"
@@ -2324,7 +2325,7 @@ export const register: Register = (on, options) => {
           </Box>
           {b.upstream && (
             <Box flexShrink={1} overflow="hidden">
-              <Text color={theme.muted} wrap="truncate-end">
+              <Text {...mutedText} wrap="truncate-end">
                 {` ${b.upstream}`}
               </Text>
             </Box>
@@ -2336,7 +2337,7 @@ export const register: Register = (on, options) => {
             {rootCounts.map(c => (
               <Text color={c.c}>{c.t}</Text>
             ))}
-            {rootCounts.length === 0 && totals[0] === 0 && totals[1] === 0 && <Text color={theme.muted}> clean</Text>}
+            {rootCounts.length === 0 && totals[0] === 0 && totals[1] === 0 && <Text {...mutedText}> clean</Text>}
           </Box>
         </Box>
       )
@@ -2353,7 +2354,7 @@ export const register: Register = (on, options) => {
           <Text bold={a.state === 'running'} color={color}>
             {a.state === 'running' ? `${a.label}…` : a.label}
           </Text>
-          {hash && <Text color={theme.muted}>{` ${hash}`}</Text>}
+          {hash && <Text {...mutedText}>{` ${hash}`}</Text>}
         </Box>
       )
     }
@@ -2377,7 +2378,7 @@ export const register: Register = (on, options) => {
         overPeek = false
       }
       let start = peekTop
-      const rule = <Text key="peek-rule" color={theme.muted}>{'─'.repeat(Math.max(1, e.props.bodyColumns))}</Text>
+      const rule = <Text key="peek-rule" {...mutedText}>{'─'.repeat(Math.max(1, e.props.bodyColumns))}</Text>
       const shown = target || anchor
       const name = shown ? (shown === t.root ? shown.split('/').pop() || shown : inside(t.root, shown) ? relative(t.root, shown) : shortPath(shown)) : ''
       const docKind = target ? pictureKind(target) : ''
@@ -2408,7 +2409,7 @@ export const register: Register = (on, options) => {
         const accent = colorOf(theme.accent, termColors, light)
         const ink = colorOf(theme.fg, termColors, light)
         const paper = termColors.bg ?? (theme.bg ? colorOf(theme.bg, termColors, light) : light ? [255, 255, 255] as Rgb : [24, 24, 24] as Rgb)
-        const muted = colorOf(theme.muted, termColors, light)
+        const muted = colorOf(theme.muted || 'ansi256(8)', termColors, light)
         const hex = (c: Rgb) => `#${c.map(v => Math.round(v).toString(16).padStart(2, '0')).join('')}`
         const inks = [ink, paper, colorOf('ansi256(15)', termColors, light), colorOf('ansi256(0)', termColors, light)]
         const known = shade || Boolean(termColors.bg)
@@ -2490,14 +2491,14 @@ export const register: Register = (on, options) => {
           )
         } else content = tiles.length
           ? <Client key="treemap" module="./rows.tsx" props={{ rows: draw(tiles, cols, peekRows, look, sized), active: '', ...rowColors, pointer } satisfies RowsProps} />
-          : <Text color={theme.muted}>{scan.done ? 'empty' : 'sizing…'}</Text>
-      } else if (!target) content = <Text color={theme.muted}>no file selected</Text>
+          : <Text {...mutedText}>{scan.done ? 'empty' : 'sizing…'}</Text>
+      } else if (!target) content = <Text {...mutedText}>no file selected</Text>
       else if (pic) {
         if (pic.state === 'ready' && Image) {
           const fit = fitCells(pic, Math.max(1, e.props.bodyColumns - 1), peekRows)
           status = isDoc ? `p ${page}/${pic.pages ?? '?'}` : `${pic.width}×${pic.height}`
           content = <Image key="peek-image" source={{ file: pic.file, format: 'png', generation: pic.generation }} columns={fit.columns} rows={fit.rows} alt={name} />
-        } else content = <Text color={theme.muted}>{pic.state === 'pending' ? 'decoding…' : pic.state === 'failed' ? pic.note : 'images show in the terminal'}</Text>
+        } else content = <Text {...mutedText}>{pic.state === 'pending' ? 'decoding…' : pic.state === 'failed' ? pic.note : 'images show in the terminal'}</Text>
       } else {
         if (isDoc && (peeked?.path !== target || (docKind === 'pdf' && peeked.page !== page))) {
           const want = `${target}\0${page}`
@@ -2528,7 +2529,7 @@ export const register: Register = (on, options) => {
         if (!peeked.text) overPeek = false
         content = peeked.text
           ? <Client key="peek" module="./rows.tsx" props={{ rows: [], active: '', ...rowColors, pointer, ...(bar ? { bar } : {}), preview: { text: win.text, path: target, startLine: win.top + 1, markdown, rows: peekRows } } satisfies RowsProps} />
-          : <Text color={theme.muted}>{raw?.state === 'pending' ? 'converting…' : peeked.note || 'empty file'}</Text>
+          : <Text {...mutedText}>{raw?.state === 'pending' ? 'converting…' : peeked.note || 'empty file'}</Text>
       }
       const title = (
         <Box key="peek-title" flexDirection="row" height={1} overflow="hidden">
@@ -2539,8 +2540,8 @@ export const register: Register = (on, options) => {
               <Text bold wrap="truncate-start">{name}</Text>
             )}
           </Box>
-          {status ? <Box flexShrink={0}><Text color={theme.muted}>{` ${status}`}</Text></Box> : null}
-          {peeked?.note && peeked.text && !pic ? <Text color={theme.muted}>{' partial'}</Text> : null}
+          {status ? <Box flexShrink={0}><Text {...mutedText}>{` ${status}`}</Text></Box> : null}
+          {peeked?.note && peeked.text && !pic ? <Text {...mutedText}>{' partial'}</Text> : null}
         </Box>
       )
       const box = <Box key="peek-body" flexDirection="column" height={peekRows} overflow="hidden">{content}</Box>
@@ -2599,10 +2600,10 @@ export const register: Register = (on, options) => {
         </Box>
         {splitAt === 'top' ? split : null}
         {branchRow()}
-        {!t.top && showHints && <Text color={theme.muted}>{unicode ? '± ' : '\u{e702} '}no git repo, git status starts after git init</Text>}
+        {!t.top && showHints && <Text {...mutedText}>{unicode ? '± ' : '\u{e702} '}no git repo, git status starts after git init</Text>}
         {searchGap ? <Text key="gap-above"> </Text> : null}
         <Box flexDirection="row">
-          {glyphSetting === 'text' ? null : <Text color={theme.muted}>{unicode ? '⌕ ' : '\u{ea6d} '}</Text>}
+          {glyphSetting === 'text' ? null : <Text {...mutedText}>{unicode ? '⌕ ' : '\u{ea6d} '}</Text>}
           <Box flexGrow={1}>
             <Input
               key="q"
@@ -2642,10 +2643,10 @@ export const register: Register = (on, options) => {
             ) : null}
             <Box flexGrow={1} />
             {latest && chip(latest)}
-            {footerName ? <Box flexShrink={0} marginLeft={2}><Text dimColor={!light} color={light ? theme.muted : undefined}>selected: </Text></Box> : null}
+            {footerName ? <Box flexShrink={0} marginLeft={2}><Text {...mutedText}>selected: </Text></Box> : null}
             {footerName ? (
               <Box flexShrink={1}>
-                <Text dimColor={!light} color={light ? theme.muted : undefined} wrap="truncate-start">{footerName}</Text>
+                <Text {...mutedText} wrap="truncate-start">{footerName}</Text>
               </Box>
             ) : null}
           </Box>

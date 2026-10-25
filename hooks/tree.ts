@@ -9,7 +9,7 @@ const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'bas
 export const DEFAULT_THEME: Theme = {
   fg: '',
   accent: 'ansi256(4)',
-  muted: 'ansi256(8)',
+  muted: '',
   urgent: 'ansi256(1)',
   selection: 'ansi256(0)',
   bg: '',

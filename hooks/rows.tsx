@@ -116,7 +116,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
           <Column flexDirection="column" flexShrink={0}>
             {Array.from({ length: p.rows }, (_, i) => {
               const on = i >= bar.pos && i < bar.pos + bar.size
-              return <Title color={on ? bar.thumb : bar.track}>{on ? '┃' : '│'}</Title>
+              return <Title color={(on ? bar.thumb : bar.track) || undefined} dimColor={!on && !bar.track}>{on ? '┃' : '│'}</Title>
             })}
           </Column>
         ) : null}
@@ -135,7 +135,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
     const palette = s.sh ? (s.dim ? props.tones[s.sh]?.dim : props.tones[s.sh]?.bright) : undefined
     if (!palette) {
       return (
-        <Text color={s.c} backgroundColor={s.bg} bold={s.b} strikethrough={s.s} italic={s.i}>
+        <Text color={s.c || undefined} dimColor={s.c === ''} backgroundColor={s.bg} bold={s.b} strikethrough={s.s} italic={s.i}>
           {s.t}
         </Text>
       )
@@ -169,7 +169,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
       <Box flexGrow={1} />
       {r.right.map(draw)}
       {props.bar && (
-        <Text color={i >= props.bar.pos && i < props.bar.pos + props.bar.size ? props.bar.thumb : props.bar.track}>
+        <Text color={(i >= props.bar.pos && i < props.bar.pos + props.bar.size ? props.bar.thumb : props.bar.track) || undefined} dimColor={!props.bar.track && !(i >= props.bar.pos && i < props.bar.pos + props.bar.size)}>
           {i >= props.bar.pos && i < props.bar.pos + props.bar.size ? '┃' : '│'}
         </Text>
       )}
