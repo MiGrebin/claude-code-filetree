@@ -50,10 +50,10 @@ const suites = [
 ]
 
 let failed = 0
-const fixed = PALETTE.filter(([, color]) => !/^ansi256\(\d+\)$/.test(color ?? ''))
-for (const [name] of fixed) console.log(`FAIL ${name} is a fixed color; defaults must be terminal palette indices`)
-failed += fixed.length
-console.log(`palette indices: ${PALETTE.map(([n, c]) => `${n}=${c}`).join(', ')} (contrast follows the terminal theme)`)
+const owned = PALETTE.filter(([, color]) => !/^ansi256\(\d+\)$/.test(color ?? '') && color !== '')
+for (const [name] of owned) console.log(`FAIL ${name} is a fixed color; defaults must be terminal palette indices or empty for dimColor`)
+failed += owned.length
+console.log(`palette indices: ${PALETTE.map(([n, c]) => `${n}=${c || 'dimColor'}`).join(', ')} (the terminal theme owns these)`)
 for (const suite of suites) {
   console.log(`\n${suite.name} palette`)
   for (const c of suite.checks) {
@@ -64,16 +64,22 @@ for (const suite of suites) {
     console.log(`${ok ? 'ok  ' : 'FAIL'} ${c.name.padEnd(16)} ${c.color}  worst ${worst[1].toFixed(2)}:1 on ${worst[0]} (needs ${c.min}:1)`)
   }
 }
-const THEMES: Record<string, [string, string, string, string, string]> = {
-  xterm: ['#000000', '#e5e5e5', '#0000ee', '#7f7f7f', '#ffffff'],
-  'tokyo-night': ['#1a1b26', '#a9b1d6', '#7aa2f7', '#414868', '#c0caf5'],
-  catppuccin: ['#1e1e2e', '#cdd6f4', '#89b4fa', '#585b70', '#cdd6f4'],
-  gruvbox: ['#282828', '#d4be98', '#7daea3', '#665c54', '#d4be98'],
-  nord: ['#2e3440', '#d8dee9', '#81a1c1', '#4c566a', '#d8dee9'],
-  everforest: ['#2d353b', '#d3c6aa', '#7fbbb3', '#475258', '#d3c6aa'],
-  'catppuccin-latte': ['#eff1f5', '#4c4f69', '#1e66f5', '#acb0be', '#4c4f69'],
-  'rose-pine': ['#faf4ed', '#575279', '#56949f', '#cecacd', '#575279'],
-  'flexoki-light': ['#fffcf0', '#100f0f', '#205ea6', '#b7b5ac', '#100f0f'],
+const THEMES: Record<string, string[]> = {
+  xterm: ['#000000', '#e5e5e5', '#0000ee', '#7f7f7f', '#ffffff', '#cd0000', '#00cd00', '#cdcd00'],
+  'tokyo-night': ['#1a1b26', '#a9b1d6', '#7aa2f7', '#414868', '#c0caf5', '#f7768e', '#9ece6a', '#e0af68'],
+  catppuccin: ['#1e1e2e', '#cdd6f4', '#89b4fa', '#585b70', '#cdd6f4', '#f38ba8', '#a6e3a1', '#f9e2af'],
+  gruvbox: ['#282828', '#d4be98', '#7daea3', '#665c54', '#d4be98', '#ea6962', '#a9b665', '#d8a657'],
+  nord: ['#2e3440', '#d8dee9', '#81a1c1', '#4c566a', '#d8dee9', '#bf616a', '#a3be8c', '#ebcb8b'],
+  everforest: ['#2d353b', '#d3c6aa', '#7fbbb3', '#475258', '#d3c6aa', '#e67e80', '#a7c080', '#dbbc7f'],
+  'catppuccin-latte': ['#eff1f5', '#4c4f69', '#1e66f5', '#acb0be', '#4c4f69', '#d20f39', '#40a02b', '#df8e1d'],
+  'rose-pine': ['#faf4ed', '#575279', '#56949f', '#cecacd', '#575279', '#b4637a', '#286983', '#ea9d34'],
+  'flexoki-light': ['#fffcf0', '#100f0f', '#205ea6', '#b7b5ac', '#100f0f', '#d14d41', '#879a39', '#d0a215'],
+}
+console.log('\ntheme-owned colors, reported not gated (dim is the Claude theme inactive grey that dimColor draws, #999999 dark and #666666 light)')
+console.log(`${'theme'.padEnd(17)}${['fg', 'red 1', 'green 2', 'yellow 3', 'blue 4', 'bright black 8', 'dim'].map(h => h.padStart(15)).join('')}`)
+for (const [name, [bg = '', fg = '', blue = '', black = '', , red = '', green = '', yellow = '']] of Object.entries(THEMES)) {
+  const dim = contrast(bg, '#000000') > contrast(bg, '#ffffff') ? '#666666' : '#999999'
+  console.log(`${name.padEnd(17)}${[fg, red, green, yellow, blue, black, dim].map(c => `${contrast(c, bg).toFixed(2)}:1`.padStart(15)).join('')}`)
 }
 const LABEL = 4.5
 const EDGE = 1.4

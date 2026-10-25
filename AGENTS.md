@@ -9,8 +9,8 @@
 
 ## Colors
 
-- Every built-in color passes `bun scripts/contrast.ts`: text, git, line-count and bright shimmer colors at 3:1 on dark terminal backgrounds, dim shimmer steps at 2:1, and the light palette at 7:1 on white, the hover and the selected row
-- The `contrast` workflow runs that gate on any change that adds or edits a hex color under `hooks/`; fix the color, never lower the gate
+- Every color the plugin picks itself (a hex value: shimmer tones, treemap fills and labels) passes `bun scripts/contrast.ts`, and the `contrast` workflow runs it on any change under `hooks/`; fix the color, never lower the gate
+- Text, git and line-count colors are terminal palette indices and muted text is the engine's `dimColor`, so the user's terminal and Claude themes own them; the script asserts they stay that way and reports their contrast in the known themes without gating on it
 
 ## Merging
 
