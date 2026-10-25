@@ -10,7 +10,7 @@ import { type DiffLine, diffWindow, splitPatch } from './diff'
 import { counted, formatLoc, locArgv, locUsage, parseLoc, sumDirs } from './loc'
 import { draw, layout, layoutPixels, parseDu, REST, type Tile, type Usage } from './treemap'
 import { boxLook, fitPixels, inkOn, over, paint, type PixelLook, png, readable, type Rgb, textHeight } from './pixmap'
-import { cellPixels, colorOf, ghosttyColors, type TermColors } from './term'
+import { CELL_PROBE, colorOf, GHOSTTY_ARGS, parseGhostty, type TermColors } from './term'
 import type { ZoneProps } from './zone'
 import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
 import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR } from './icons'
@@ -1692,6 +1692,23 @@ function turnPage($: EngineInterface, by: number): boolean {
     void $.ui.invalidate('ui.render')
   }
   return true
+}
+
+async function cellPixels($: EngineInterface): Promise<{ cw: number; ch: number } | null> {
+  try {
+    const [cw = 0, ch = 0] = (await $.process.run(['python3', '-I', '-c', CELL_PROBE], { timeoutMs: 3_000 })).stdout.trim().split(/\s+/).map(Number)
+    return cw > 2 && ch > 4 ? { cw, ch } : null
+  } catch {
+    return null
+  }
+}
+
+async function ghosttyColors($: EngineInterface): Promise<TermColors> {
+  const args = (await $.process.run(['sh', '-c', GHOSTTY_ARGS], { timeoutMs: 3_000 }).catch(() => ({ stdout: '' }))).stdout.split('\n')
+  const files = args.filter(a => a.startsWith('--config-file=')).map(a => a.slice('--config-file='.length).replace(/^\?/, ''))
+  const own = args.includes('--config-default-files=false') ? '' : (await $.process.run(['ghostty', '+show-config'], { timeoutMs: 3_000 }).catch(() => ({ stdout: '' }))).stdout
+  const read = await Promise.all(files.map(f => $.fs.read(f).then(String, () => '')))
+  return parseGhostty([own, ...read, ...args.filter(a => a.startsWith('--'))].join('\n'))
 }
 
 async function navigate($: EngineInterface, key: string, shift = false, surface?: string): Promise<void> {

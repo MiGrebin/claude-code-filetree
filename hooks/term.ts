@@ -1,4 +1,3 @@
-import type { EngineInterface } from 'claude-code'
 import { type Rgb, rgbOf } from './pixmap'
 
 export type TermColors = { fg?: Rgb; bg?: Rgb; palette: Record<number, Rgb> }
@@ -11,15 +10,6 @@ const XTERM: Rgb[] = [
 export const CELL_PROBE = 'import fcntl,os,struct,termios\nfd=os.open("/dev/tty",os.O_RDONLY)\nr,c,x,y=struct.unpack("HHHH",fcntl.ioctl(fd,termios.TIOCGWINSZ,b"\\0"*8))\nprint(x//c if c and x else 0,y//r if r and y else 0)'
 
 export const GHOSTTY_ARGS = 'p=$PPID; while [ "$p" -gt 1 ] 2>/dev/null; do case "$(cat /proc/$p/comm 2>/dev/null)" in ghostty*) tr "\\0" "\\n" < /proc/$p/cmdline; exit 0;; esac; p=$(cut -d" " -f4 /proc/$p/stat 2>/dev/null) || exit 0; done'
-
-export async function cellPixels($: EngineInterface): Promise<{ cw: number; ch: number } | null> {
-  try {
-    const [cw = 0, ch = 0] = (await $.process.run(['python3', '-I', '-c', CELL_PROBE], { timeoutMs: 3_000 })).stdout.trim().split(/\s+/).map(Number)
-    return cw > 2 && ch > 4 ? { cw, ch } : null
-  } catch {
-    return null
-  }
-}
 
 export function parseGhostty(text: string): TermColors {
   const out: TermColors = { palette: {} }
@@ -38,14 +28,6 @@ export function parseGhostty(text: string): TermColors {
     }
   }
   return out
-}
-
-export async function ghosttyColors($: EngineInterface): Promise<TermColors> {
-  const args = (await $.process.run(['sh', '-c', GHOSTTY_ARGS], { timeoutMs: 3_000 }).catch(() => ({ stdout: '' }))).stdout.split('\n')
-  const files = args.filter(a => a.startsWith('--config-file=')).map(a => a.slice('--config-file='.length).replace(/^\?/, ''))
-  const own = args.includes('--config-default-files=false') ? '' : (await $.process.run(['ghostty', '+show-config'], { timeoutMs: 3_000 }).catch(() => ({ stdout: '' }))).stdout
-  const read = await Promise.all(files.map(f => $.fs.read(f).then(String, () => '')))
-  return parseGhostty([own, ...read, ...args.filter(a => a.startsWith('--'))].join('\n'))
 }
 
 export function colorOf(color: string, term: TermColors, light: boolean): Rgb {
