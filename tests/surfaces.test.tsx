@@ -1760,7 +1760,7 @@ test('the footer names the entry under the cursor, and ? shows the shortcuts wit
   await ui.unmount()
 })
 
-test('the root row has a folder glyph, k from the first row selects it, the split maps the whole root, and the footer keeps ?: shortcuts left of the selected name', { timeoutMs: 20_000 }, async ($, on) => {
+test('the root row has a folder glyph, k from the first row selects it and k on it stays, the split maps the whole root, and the footer keeps ?: shortcuts left of the selected name', { timeoutMs: 20_000 }, async ($, on) => {
   const ran: Ran = []
   const root = '/home/k/proj'
   const clock = world(on, {
@@ -1794,6 +1794,9 @@ test('the root row has a folder glyph, k from the first row selects it, the spli
   await ui.post({ key: 'k' }, { in: 'rows' })
   await clock.settle()
   await ui.press({ key: 'root' })
+  await clock.settle()
+  expect(footer(await ui.drawn())).toContain(`"active":"${root}"`)
+  await ui.post({ key: 'k' }, { in: 'rows' })
   await clock.settle()
   expect(footer(await ui.drawn())).toContain(`"active":"${root}"`)
   await ui.unmount()

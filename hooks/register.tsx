@@ -1718,7 +1718,7 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
   const cur = rows[at]?.node
   const onRoot = Boolean(t.root) && t.cursor === t.root
   const move = (d: number) => {
-    const to = onRoot ? Math.max(0, Math.min(rows.length - 1, d - 1)) : at === 0 && d === -1 ? -1 : Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + d))
+    const to = onRoot ? (d < 0 ? -1 : Math.min(rows.length - 1, d - 1)) : at === 0 && d === -1 ? -1 : Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + d))
     const id = to < 0 ? t.root : rows[to]?.node.id
     return id ? patch($, () => ({ cursor: id, selected: id, scroll: null })) : Promise.resolve()
   }
