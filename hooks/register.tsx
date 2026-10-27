@@ -2621,7 +2621,7 @@ export const register: Register = (on, options) => {
           </Box>
           {planLines.map(line =>
             line.kind === 'task' ? (
-              <Box flexDirection="row" height={1} overflow="hidden">
+              <Box key={`plan-${line.task.id}`} flexDirection="row" height={1} overflow="hidden">
                 <Text {...(line.status === 'completed' ? { color: addColor } : line.status === 'in_progress' ? strong : mutedText)}>{`${PLAN_GLYPH[line.status]} `}</Text>
                 <Box flexShrink={0}>
                   <Text {...(line.status === 'in_progress' ? strong : mutedText)}>{`${line.task.id.padStart(idWidth)}  `}</Text>
@@ -2633,7 +2633,7 @@ export const register: Register = (on, options) => {
                 </Box>
               </Box>
             ) : (
-              <Text {...mutedText} wrap="truncate-end">
+              <Text key={`plan-${line.kind}`} {...mutedText} wrap="truncate-end">
                 {summaryLabel(line)}
               </Text>
             ),
