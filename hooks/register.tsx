@@ -2194,15 +2194,18 @@ export const register: Register = (on, options) => {
     const body = e.props.scroll?.bodyRows ?? 40
     const plan = await readPlan($)
     const planStatus = statuses(plan)
-    const planLines = plan.path ? planWindow(plan.tasks, planStatus, nativeScroll ? plan.tasks.length : Math.max(3, Math.floor(body / 3) - 1)) : []
-    const planRows = planLines.length ? planLines.length + 1 : 0
     const footer = t.nodes.find(n => n.id === t.cursor)?.id ?? (t.selected || '')
-    const chrome = planRows + 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
+    const tail = (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
+    const baseChrome = 1 + (searchGap ? 2 : 0) + 1 + tail
+    const planFit = nativeScroll ? plan.tasks.length : Math.min(Math.max(3, Math.floor(body / 3) - 1), body - baseChrome - 5 - 1)
+    const planLines = plan.path && planFit >= Math.min(3, plan.tasks.length) ? planWindow(plan.tasks, planStatus, planFit) : []
+    const planRows = planLines.length ? planLines.length + 1 : 0
+    const chrome = planRows + baseChrome
     const spare = body - chrome - 5
     const splitRows = t.split && !nativeScroll && spare >= 6 && (treemapSetting !== 'off' || Boolean(peekTarget(t))) ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
     splitShown = splitRows > 0
     if (!splitShown) overPeek = false
-    const fixed = planRows + splitRows + 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
+    const fixed = planRows + splitRows + baseChrome
     const room = nativeScroll ? Math.max(1, rows.length) : Math.max(5, (e.props.scroll?.bodyRows ?? 40) - fixed)
     const isLit = (id: string) => bright.has(id) || dimmed.has(id)
     const focus = followClaude && t.flashOn ? ([...t.flash].reverse().find(id => id !== BRANCH_ROW) ?? t.cursor) : t.cursor

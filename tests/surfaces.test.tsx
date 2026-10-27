@@ -2764,6 +2764,24 @@ test('plan progress: the pane draws the plan below the tree and gives up tree ro
   await ui.unmount()
 })
 
+test('plan progress: a short pane leaves the plan out and keeps five tree rows', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [], { rootFiles: MANY_FILES })
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await runPlan($, clock, BIG_PLAN)
+  const seen: [number, boolean, boolean, boolean][] = []
+  for (const bodyRows of [10, 14, 15, 30]) {
+    const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: { ...paneProps(60), scroll: { offset: 0, bodyRows } } })
+    await clock.settle()
+    await clock.advance(5_000)
+    await clock.settle()
+    const shown = await texts(ui)
+    seen.push([bodyRows, /Plan \d+\/\d+/.test(shown), shown.includes('Teil 3 Ende'), ((await ui.drawn({ in: 'rows' })).children?.length ?? 0) >= 5])
+    await ui.unmount()
+  }
+  expect(seen).toEqual([[10, false, false, true], [14, false, false, true], [15, true, false, true], [30, true, true, true]])
+})
+
 test('plan progress: a long plan shows a window around the current task with summary rows', { timeoutMs: 20_000 }, async ($, on) => {
   const clock = planWorld(on, [])
   await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
