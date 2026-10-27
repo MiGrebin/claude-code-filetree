@@ -2583,6 +2583,7 @@ const BIG_PLAN = `${PLANS}/2026-10-27-big.md`
 const AUTH_MD = ['# Auth Refactor Implementation Plan', '', '### Task 1: Setup', '', '### Task 2: Datenmodell', '', '### Task 3: API-Endpoint', ''].join('\n')
 const OLD_MD = ['# Altplan', '', '## Task 1: Alt', '', '## Task 2: Auch alt', ''].join('\n')
 const BIG_MD = ['# Big', '', ...Array.from({ length: 35 }, (_, i) => `### Task ${i + 1}: Teil ${i + 1} Ende`)].join('\n')
+const INDEX_PLAN = `${PLANS}/README.md`
 const RUN_SKILL = 'superpowers:subagent-driven-development'
 
 function planWorld(on: any, ran: Ran, extra: { rootFiles?: [string, 'file' | 'dir'][] } = {}) {
@@ -2600,7 +2601,7 @@ function planWorld(on: any, ran: Ran, extra: { rootFiles?: [string, 'file' | 'di
       [`${PLAN_ROOT}/docs/superpowers`]: [['plans', 'dir']],
       [PLANS]: [['2026-09-01-old.md', 'file'], ['2026-10-27-auth.md', 'file'], ['2026-10-27-big.md', 'file']],
     },
-    files: { [AUTH_PLAN]: AUTH_MD, [OLD_PLAN]: OLD_MD, [BIG_PLAN]: BIG_MD },
+    files: { [AUTH_PLAN]: AUTH_MD, [OLD_PLAN]: OLD_MD, [BIG_PLAN]: BIG_MD, [INDEX_PLAN]: '# Plans\n\nNothing to do here.\n' },
     tool: (e: any) =>
       e.tool === 'TaskCreate' ? { result: { task: { id: String(++id), subject: e.subject } } }
       : e.tool === 'TaskUpdate' ? { result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }
@@ -2643,6 +2644,19 @@ test('plan progress: only an executing skill activates a plan, and the task list
   await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'deleted' } as any)
   await clock.settle()
   expect(statuses(await planOf($))['2']).toBe('pending')
+})
+
+test('plan progress: a plans-dir file without tasks keeps the pick for the real plan', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL } as any)
+  await $.tool.call({ tool: 'Read', file_path: INDEX_PLAN } as any)
+  await clock.settle()
+  expect((await planOf($))?.path ?? '').toBe('')
+  await $.tool.call({ tool: 'Read', file_path: AUTH_PLAN } as any)
+  await clock.settle()
+  expect((await planOf($)).path).toBe(AUTH_PLAN)
 })
 
 test('plan progress: tool calls of subagents change nothing', { timeoutMs: 20_000 }, async ($, on) => {

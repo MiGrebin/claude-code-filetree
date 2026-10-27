@@ -15,15 +15,22 @@ async function edit($: EngineInterface, fn: (plan: Plan) => Plan): Promise<void>
   await update($, PLAN, cur => fn({ ...EMPTY, ...cur }))
 }
 
-async function activate($: EngineInterface, path: string): Promise<void> {
+async function activate($: EngineInterface, path: string): Promise<boolean> {
   let parsed: ReturnType<typeof parsePlan>
   try {
     parsed = parsePlan(String(await $.fs.read(path)), path)
   } catch {
-    return
+    return false
   }
-  if (parsed.tasks.length === 0) return
+  if (parsed.tasks.length === 0) return false
   await edit($, plan => ({ ...plan, path, title: parsed.title, tasks: parsed.tasks }))
+  return true
+}
+
+async function arm($: EngineInterface): Promise<void> {
+  await edit($, plan => ({ ...plan, pick: true }))
+  const { candidate } = await readPlan($)
+  if (candidate) await activate($, candidate)
 }
 
 export function trackPlan(on: On): void {
@@ -33,17 +40,15 @@ export function trackPlan(on: On): void {
     const path = posix(e.file_path)
     if (!isPlanFile(path)) return result
     const plan = await readPlan($)
-    await edit($, cur => ({ ...cur, candidate: path, pick: false }))
-    if (plan.pick || plan.path === path) await activate($, path)
+    await edit($, cur => ({ ...cur, candidate: path }))
+    if ((plan.pick || plan.path === path) && (await activate($, path))) await edit($, cur => ({ ...cur, pick: false }))
     return result
   })
 
   on('tool.call', { tool: 'Skill' }, async ($, e, next) => {
     const result = await next(e)
     if (result.deny || result.isError || e.agentId || e.tool !== 'Skill' || !isExecuteSkill(e.skill)) return result
-    await edit($, plan => ({ ...plan, pick: true }))
-    const { candidate } = await readPlan($)
-    if (candidate) await activate($, candidate)
+    await arm($)
     return result
   })
 
