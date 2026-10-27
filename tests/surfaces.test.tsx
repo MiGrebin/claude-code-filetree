@@ -2777,7 +2777,7 @@ test('plan progress: a short pane leaves the plan out and keeps five tree rows',
     await clock.advance(5_000)
     await clock.settle()
     const shown = await texts(ui)
-    seen.push([bodyRows, /Plan \d+\/\d+/.test(shown), shown.includes('Teil 3 Ende'), ((await ui.drawn({ in: 'rows' })).children?.length ?? 0) >= 5])
+    seen.push([bodyRows, /Plan \d+\/\d+/.test(shown), shown.includes('Teil 3 Ende'), (((await ui.drawn({ in: 'rows' })) as any).children?.length ?? 0) >= 5])
     await ui.unmount()
   }
   expect(seen).toEqual([[10, false, false, true], [14, false, false, true], [15, true, false, true], [30, true, true, true]])
