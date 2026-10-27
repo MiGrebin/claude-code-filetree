@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { isExecuteSkill, isPlanFile, matchTask, parsePlan } from '../hooks/plan'
+import type { Plan, PlanStatus, PlanTask } from '../types'
+import { doneCount, isExecuteSkill, isPlanFile, matchTask, parsePlan, type PlanLine, planHeading, planHint, planWindow, statuses, summaryLabel } from '../hooks/plan'
 
 const PLAN = [
   '# Werkbank-API Revisionen – Implementierungsplan (PIM)',
@@ -72,4 +73,55 @@ test('matchTask finds the plan task by its number first, then by its exact title
   expect(matchTask('Setup the database', TASKS)).toBeUndefined()
   expect(matchTask('Review all tasks 1-3', TASKS)).toBeUndefined()
   expect(matchTask('', TASKS)).toBeUndefined()
+})
+
+const plan = (claude: Plan['claude'], path = '/p/a.md'): Plan => ({ candidate: path, pick: false, path, title: 'A', tasks: TASKS, claude })
+const many = (n: number): PlanTask[] => Array.from({ length: n }, (_, i) => ({ id: String(i + 1), title: `T${i + 1}` }))
+const marks = (n: number, fn: (id: number) => PlanStatus): Record<string, PlanStatus> => Object.fromEntries(Array.from({ length: n }, (_, i) => [String(i + 1), fn(i + 1)]))
+const range = (from: number, to: number, mark: string) => Array.from({ length: to - from + 1 }, (_, i) => `${mark}${from + i}`)
+const shape = (lines: PlanLine[]) => lines.map(l => (l.kind === 'task' ? `${l.status[0]}${l.task.id}` : `${l.kind}:${l.count}${l.allDone ? '✓' : ''}`))
+
+test('statuses ranks in_progress over completed over pending and counts only tasks of this plan', () => {
+  expect(statuses(plan({
+    a: { subject: 'Task 1: Setup', status: 'completed', plan: '/p/a.md' },
+    b: { subject: 'Task 1: Setup', status: 'in_progress', plan: '/p/a.md' },
+    c: { subject: 'Task 2', status: 'completed', plan: '' },
+    d: { subject: 'Task P3', status: 'completed', plan: '/p/old.md' },
+    e: { subject: 'Final review', status: 'in_progress', plan: '/p/a.md' },
+  }))).toEqual({ '1': 'in_progress', '2': 'completed', P3: 'pending' })
+  expect(doneCount(TASKS, { '1': 'completed', '2': 'in_progress', P3: 'completed' })).toBe(2)
+})
+
+test('planWindow shows every task that fits and otherwise a window around the current task', () => {
+  expect(shape(planWindow(many(5), {}, 12))).toEqual(range(1, 5, 'p'))
+  expect(shape(planWindow(many(35), marks(35, i => (i <= 20 ? 'completed' : i === 21 ? 'in_progress' : 'pending')), 12)))
+    .toEqual(['before:19✓', 'c20', 'i21', ...range(22, 29, 'p'), 'after:6'])
+  expect(shape(planWindow(many(35), {}, 12))).toEqual([...range(1, 11, 'p'), 'after:24'])
+  expect(shape(planWindow(many(35), marks(35, () => 'completed'), 12))).toEqual(['before:24✓', ...range(25, 35, 'c')])
+  expect(shape(planWindow(many(35), marks(35, i => (i === 1 ? 'completed' : i === 2 ? 'in_progress' : 'pending')), 12)))
+    .toEqual(['c1', 'i2', ...range(3, 11, 'p'), 'after:24'])
+  expect(shape(planWindow(many(10), marks(10, i => (i <= 5 ? 'completed' : i === 6 ? 'in_progress' : 'pending')), 3)))
+    .toEqual(['before:5✓', 'i6', 'after:4'])
+  expect(shape(planWindow(many(35), marks(35, i => (i === 2 ? 'pending' : i < 20 ? 'completed' : i === 20 ? 'in_progress' : 'pending')), 12)))
+    .toEqual(['before:18', 'c19', 'i20', ...range(21, 28, 'p'), 'after:7'])
+})
+
+test('summaryLabel, planHeading and planHint word the plan section', () => {
+  expect(summaryLabel({ kind: 'before', count: 19, allDone: true })).toBe('✓ 19 erledigt')
+  expect(summaryLabel({ kind: 'before', count: 3, allDone: false })).toBe('⋮ 3 davor')
+  expect(summaryLabel({ kind: 'after', count: 6, allDone: false })).toBe('○ 6 weitere')
+  expect(summaryLabel({ kind: 'after', count: 2, allDone: true })).toBe('✓ 2 erledigt')
+  const wide = planHeading(2, 5, 'Auth-Refactor', 40)
+  expect(wide.label).toBe('Plan 2/5')
+  expect(wide.rest).toStartWith(' · Auth-Refactor ')
+  expect(wide.rest).toEndWith('─')
+  expect(`── ${wide.label}${wide.rest}`).toHaveLength(40)
+  const long = planHeading(0, 3, 'A'.repeat(50), 30)
+  expect(long.rest).toBe(` · ${'A'.repeat(14)}… `)
+  expect(`── ${long.label}${long.rest}`).toHaveLength(30)
+  expect(planHeading(0, 3, 'Titel', 12).rest).toBe(' ')
+  const hint = planHint('/r/docs/superpowers/plans/x.md')
+  expect(hint).toContain('/r/docs/superpowers/plans/x.md')
+  expect(hint).toContain('`Task <id>: <title>`')
+  expect(hint).toContain('not a subagent')
 })
