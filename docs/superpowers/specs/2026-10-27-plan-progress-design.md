@@ -10,6 +10,7 @@ Während Claude einen superpowers-Plan ausführt (`subagent-driven-development` 
 
 - **Fork statt eigener Mod.** Die Mod-API zeigt in der Sidebar immer nur ein Pane, weitere offene Panes werden zu Tabs („one shown, the rest tabs“). Ein Bereich *unter* dem Dateibaum geht deshalb nur innerhalb des filetree-Panes. Der Fork liegt unter `MiGrebin/claude-code-filetree`, `upstream` zeigt auf `data-goblin/claude-code-filetree`, Updates kommen per `git merge upstream/main`.
 - **Tasks aus der Plan-Datei, Status aus Claudes Task-Liste.** Die Checkboxen in den Plan-Dateien bleiben in der Praxis offen (in ~30 lokalen Plänen fast nie abgehakt), und SDD-Ledger gibt es lokal keine. Verlässlich gepflegt wird nur Claudes Task-Liste (`TaskCreate`/`TaskUpdate`, ältere Sessions `TodoWrite`). Die Plan-Datei liefert deshalb Liste und Nummern, die Task-Liste den Status.
+- **Nachtrag nach dem ersten echten Lauf (2026-10-27):** Ein `executing-plans`-Lauf hat die Plan-Datei nur per `cat` gelesen, die Checkboxen per `sed -i` abgehakt und keine einzige Task angelegt. Der Plan erschien deshalb nie. Seitdem gilt: Der Planpfad kommt bevorzugt aus den Argumenten des Ausführungs-Skills, Bash-Befehle des Hauptloops zählen wie Read/Write/Edit, und abgehakte Checkboxen sind eine zweite Status-Quelle neben der Task-Liste.
 - **Kurzer Hinweis an Claude.** Solange ein Plan aktiv ist, ergänzt der Mod per `prompt.compose` den System-Prompt um eine Namenskonvention für die Tasks, damit sie sich zuverlässig zuordnen lassen.
 
 ## Architektur
@@ -34,7 +35,9 @@ Während Claude einen superpowers-Plan ausführt (`subagent-driven-development` 
 2. Sonst vergleicht die Funktion das Subject ohne ein führendes `Task <id>:` normalisiert mit den Plan-Titeln: Kleinschreibung, ohne Backticks und Satzzeichen, Leerraum zusammengefasst. Nur exakte Gleichheit zählt.
 3. Sonst gibt es keine Zuordnung. Die Brainstorming-Checkliste oder „Final review“ bleiben damit außen vor.
 
-**Status (`statuses`).** Es zählen nur Claude-Tasks, die unter diesem Plan angelegt wurden (`plan` gleich dem aktiven Pfad) oder bevor überhaupt ein Plan aktiv war (`plan` leer). Jede davon, die sich zuordnen lässt, setzt den Status ihrer Plan-Task. Ordnen sich mehrere Claude-Tasks derselben Plan-Task zu, gilt die Rangfolge `in_progress` > `completed` > `pending`. Plan-Tasks ohne Zuordnung sind `pending`.
+**Status (`statuses`).** Es zählen nur Claude-Tasks, die unter diesem Plan angelegt wurden (`plan` gleich dem aktiven Pfad) oder bevor überhaupt ein Plan aktiv war (`plan` leer). Jede davon, die sich zuordnen lässt, setzt den Status ihrer Plan-Task. Ordnen sich mehrere Claude-Tasks derselben Plan-Task zu, gilt die Rangfolge `in_progress` > `completed` > `pending`. Dazu kommen die Checkboxen: `parsePlan` zählt je Task die Checkboxen (`- [ ]`/`- [x]`) bis zur nächsten Überschrift derselben oder einer höheren Ebene, außerhalb von Code-Blöcken (`checks: Record<id, [abgehakt, gesamt]>`). Alle abgehakt ergibt `completed`, ein Teil davon `in_progress`; mit der Task-Liste gilt der höhere Rang. Plan-Tasks ohne beides sind `pending`.
+
+**Planpfade in Text (`planPaths`, `argumentsOf`).** `planPaths(text, cwd)` findet Pfade `…docs/superpowers/plans/<name>.md` in einem Bash-Befehl oder in Skill-Argumenten und löst relative Pfade gegen das Arbeitsverzeichnis der Session auf; Platzhalter wie `YYYY-MM-DD-<feature-name>.md` zählen nicht. `argumentsOf(text)` liest die letzte `ARGUMENTS:`-Zeile eines expandierten Skill-Texts.
 
 **Fenster (`planWindow`).** `PlanLine` ist `{ kind: 'task'; task: PlanTask; status: PlanStatus }` oder `{ kind: 'before' | 'after'; count: number; allDone: boolean }`.
 - Passen alle Tasks in `rows`, werden alle angezeigt.
@@ -69,14 +72,15 @@ Berücksichtigt werden nur Aufrufe des Hauptloops: Ein `tool.call` mit `agentId`
 | Tool | Wirkung |
 | --- | --- |
 | `Read`, `Write`, `Edit` auf eine Plan-Datei | `candidate = path`. Ist `pick` gesetzt → aktivieren; nur wenn die Datei Tasks hat, wird `pick = false` (eine Datei ohne Tasks, etwa ein Index, verbraucht ihn nicht). Sonst, wenn es der aktive Plan ist → neu parsen. |
-| `Skill` mit Ausführungs-Skill, sowie `skill.prompt` für denselben Skill (ein als `/name` getippter Skill löst keinen Tool-Call aus; `skill.prompt` trägt keine `agentId`, Subagents werden dort also nicht gefiltert; der Text bleibt unverändert) | `pick = true`. Gibt es einen `candidate` → aktivieren (`pick` bleibt gesetzt, damit ein danach gelesener anderer Plan übernimmt). |
+| `Bash` (auch wenn der Befehl fehlschlägt; nur ein `deny` zählt nicht) | Jeder Planpfad im Befehl (`planPaths`) wird behandelt wie ein Read derselben Datei. Danach wird der aktive Plan neu eingelesen, wenn sich seine Änderungszeit (`mtime`) geändert hat, etwa weil `sed` Checkboxen abgehakt hat. |
+| `Skill` mit Ausführungs-Skill, sowie `skill.prompt` für denselben Skill (ein als `/name` getippter Skill löst keinen Tool-Call aus; `skill.prompt` trägt keine `agentId`, Subagents werden dort also nicht gefiltert; der Text bleibt unverändert) | Nennen die Argumente (`args` bzw. die `ARGUMENTS:`-Zeile) einen Plan, der sich aktivieren lässt → genau dieser wird aktiv und `pick = false`. Sonst `pick = true`; gibt es einen `candidate` → aktivieren (`pick` bleibt gesetzt, damit ein danach gelesener anderer Plan übernimmt). |
 | `TaskCreate` | `claude[result.task.id] = { subject, status: 'pending', plan: <aktiver Pfad> }` |
 | `TaskUpdate` | Status bzw. Subject im Spiegel aktualisieren (`plan` bleibt). `deleted` entfernt den Eintrag. |
 | `TodoWrite` | Alle Einträge `todo:<i>` durch `todos` ersetzen (`content` → `subject`). `plan` bleibt erhalten, wenn an derselben Stelle derselbe Text stand, sonst wird der aktive Pfad eingetragen. |
 
 Den Spiegel pflegt der Mod immer, auch ohne aktiven Plan. Tasks, die vor dem ersten Aktivieren angelegt wurden (`plan` leer), zählen für jeden Plan.
 
-**Aktivieren** (`path` → Datei lesen über `$.fs.read`, `parsePlan`): setzt `path`, `title` und `tasks`. Der Spiegel bleibt unverändert, denn welche Tasks zählen, ergibt sich aus deren `plan`. „Task 1“ eines früheren Plans zählt also nicht für den neuen, und beim Zurückwechseln ist der Fortschritt wieder da. Hat der Plan keine erkennbaren Tasks oder lässt sich die Datei nicht lesen, wird nichts aktiviert und der bisherige Zustand bleibt.
+**Aktivieren** (`path` → Änderungszeit über `$.fs.stat`, Datei lesen über `$.fs.read`, `parsePlan`): setzt `path`, `title`, `tasks`, `checks` und `mtime`. Der Spiegel bleibt unverändert, denn welche Tasks zählen, ergibt sich aus deren `plan`. „Task 1“ eines früheren Plans zählt also nicht für den neuen, und beim Zurückwechseln ist der Fortschritt wieder da. Hat der Plan keine erkennbaren Tasks oder lässt sich die Datei nicht lesen, wird nichts aktiviert und der bisherige Zustand bleibt.
 
 Ohne Ausführungs-Skill wird nie ein Plan aktiv. Ein Plan, den Claude nur zum Nachschlagen liest oder per `writing-plans` schreibt, erscheint also nicht.
 
