@@ -43,7 +43,28 @@ test('parsePlan reads the title and every task heading outside code blocks', () 
       { id: '9R', title: 'Branch from origin/main' },
       { id: '10', title: 'Dialog und Darstellung' },
     ],
+    checks: { '1': [0, 1], '2': [0, 0], P3: [0, 0], '9R': [0, 0], '10': [0, 0] },
   })
+})
+
+test('parsePlan counts the ticked steps of each task, outside code blocks and up to the next heading of its level', () => {
+  const md = [
+    '# P',
+    '### Task 1: Eins',
+    '- [x] **Step 1: a**',
+    '- [X] **Step 2: b**',
+    '### Task 2: Zwei',
+    '- [x] **Step 1: a**',
+    '```markdown',
+    '- [x] im Beispiel',
+    '```',
+    '- [ ] **Step 2: b**',
+    '  - [ ] eingerückt',
+    '### Task 3: Drei',
+    '## Nach dem Plan',
+    '- [x] gehört zu keiner Task',
+  ].join('\n')
+  expect(parsePlan(md).checks).toEqual({ '1': [2, 2], '2': [1, 3], '3': [0, 0] })
 })
 
 test('parsePlan strips the plan suffix from the title and falls back to the file name', () => {
@@ -75,11 +96,16 @@ test('matchTask finds the plan task by its number first, then by its exact title
   expect(matchTask('', TASKS)).toBeUndefined()
 })
 
-const plan = (claude: Plan['claude'], path = '/p/a.md'): Plan => ({ candidate: path, pick: false, path, title: 'A', tasks: TASKS, claude })
+const plan = (claude: Plan['claude'], path = '/p/a.md', checks: Plan['checks'] = {}): Plan => ({ candidate: path, pick: false, path, title: 'A', tasks: TASKS, claude, checks, mtime: 0 })
 const many = (n: number): PlanTask[] => Array.from({ length: n }, (_, i) => ({ id: String(i + 1), title: `T${i + 1}` }))
 const marks = (n: number, fn: (id: number) => PlanStatus): Record<string, PlanStatus> => Object.fromEntries(Array.from({ length: n }, (_, i) => [String(i + 1), fn(i + 1)]))
 const range = (from: number, to: number, mark: string) => Array.from({ length: to - from + 1 }, (_, i) => `${mark}${from + i}`)
 const shape = (lines: PlanLine[]) => lines.map(l => (l.kind === 'task' ? `${l.status[0]}${l.task.id}` : `${l.kind}:${l.count}${l.allDone ? '✓' : ''}`))
+
+test('statuses reads ticked checkboxes: all steps ticked is completed, some ticked is in_progress', () => {
+  expect(statuses(plan({}, '/p/a.md', { '1': [2, 2], '2': [1, 3], P3: [0, 0] }))).toEqual({ '1': 'completed', '2': 'in_progress', P3: 'pending' })
+  expect(statuses(plan({ a: { subject: 'Task 1', status: 'in_progress', plan: '/p/a.md' } }, '/p/a.md', { '1': [2, 2] }))['1']).toBe('in_progress')
+})
 
 test('statuses ranks in_progress over completed over pending and counts only tasks of this plan', () => {
   expect(statuses(plan({

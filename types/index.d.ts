@@ -85,6 +85,8 @@ export type Plan = {
   title: string
   tasks: PlanTask[]
   claude: Record<string, ClaudeTask>
+  checks: Record<string, [number, number]>
+  mtime: number
 }
 
 declare module 'claude-code' {

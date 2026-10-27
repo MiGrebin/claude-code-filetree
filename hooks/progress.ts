@@ -5,7 +5,7 @@ import { isExecuteSkill, isPlanFile, parsePlan, planHint } from './plan'
 import { posix } from './tree'
 
 const PLAN = { plugin: 'filetree', key: 'plan' } as const
-const EMPTY: Plan = { candidate: '', pick: false, path: '', title: '', tasks: [], claude: {} }
+const EMPTY: Plan = { candidate: '', pick: false, path: '', title: '', tasks: [], claude: {}, checks: {}, mtime: 0 }
 
 export async function readPlan($: EngineInterface): Promise<Plan> {
   return { ...EMPTY, ...(await $.state.get(PLAN)).value }
