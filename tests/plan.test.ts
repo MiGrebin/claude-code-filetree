@@ -125,3 +125,8 @@ test('summaryLabel, planHeading and planHint word the plan section', () => {
   expect(hint).toContain('`Task <id>: <title>`')
   expect(hint).toContain('not a subagent')
 })
+
+test('parsePlan strips the plan suffix only as a whole word', () => {
+  expect(parsePlan('# Reimplementation Plan\n### Task 1: A').title).toBe('Reimplementation Plan')
+  expect(parsePlan('# Auth - Implementation Plan (v2)\n### Task 1: A').title).toBe('Auth')
+})

@@ -12,7 +12,7 @@ const HEADING = /^#{2,4}\s+(?:Task|Aufgabe)\s+([A-Za-z]?\d+[A-Za-z]?)\s*[:.–�
 const FENCE = /^\s*(`{3,}|~{3,})/
 const MENTION = /\b(?:Task|Aufgabe)\s+([A-Za-z]?\d+[A-Za-z]?)\b/i
 const PREFIX = /^\s*(?:Task|Aufgabe)\s+[A-Za-z]?\d+[A-Za-z]?\s*[:.–—-]?\s*/i
-const SUFFIX = /\s*[–—-]?\s*(?:Implementation Plan|Implementierungsplan)\s*(?:\([^)]*\))?\s*$/i
+const SUFFIX = /\s*[–—-]?\s*\b(?:Implementation Plan|Implementierungsplan)\s*(?:\([^)]*\))?\s*$/i
 const RANK: Record<PlanStatus, number> = { pending: 0, completed: 1, in_progress: 2 }
 
 export function isPlanFile(path: string): boolean {
