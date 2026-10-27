@@ -4,13 +4,14 @@ Stand: 2026-10-27 · Fork `MiGrebin/claude-code-filetree`, Branch `feat/plan-pro
 
 ## Ziel
 
-Während Claude einen superpowers-Plan ausführt (`subagent-driven-development` oder `executing-plans`), zeigt das Files-Pane von filetree ganz unten alle Tasks des Plans und markiert, welche erledigt sind und an welcher gerade gearbeitet wird. So sieht man jederzeit, wie weit die Implementierung ist.
+Während Claude einen superpowers-Plan ausführt (`subagent-driven-development` oder `executing-plans`), teilt sich das Files-Pane von filetree in der Mitte: oben der Dateibaum, unten alle Tasks des Plans, markiert danach, welche erledigt sind und an welcher gerade gearbeitet wird. So sieht man jederzeit, wie weit die Implementierung ist.
 
 ## Entscheidungen und Begründung
 
 - **Fork statt eigener Mod.** Die Mod-API zeigt in der Sidebar immer nur ein Pane, weitere offene Panes werden zu Tabs („one shown, the rest tabs“). Ein Bereich *unter* dem Dateibaum geht deshalb nur innerhalb des filetree-Panes. Der Fork liegt unter `MiGrebin/claude-code-filetree`, `upstream` zeigt auf `data-goblin/claude-code-filetree`, Updates kommen per `git merge upstream/main`.
 - **Tasks aus der Plan-Datei, Status aus Claudes Task-Liste.** Die Checkboxen in den Plan-Dateien bleiben in der Praxis offen (in ~30 lokalen Plänen fast nie abgehakt), und SDD-Ledger gibt es lokal keine. Verlässlich gepflegt wird nur Claudes Task-Liste (`TaskCreate`/`TaskUpdate`, ältere Sessions `TodoWrite`). Die Plan-Datei liefert deshalb Liste und Nummern, die Task-Liste den Status.
 - **Nachtrag nach dem ersten echten Lauf (2026-10-27):** Ein `executing-plans`-Lauf hat die Plan-Datei nur per `cat` gelesen, die Checkboxen per `sed -i` abgehakt und keine einzige Task angelegt. Der Plan erschien deshalb nie. Seitdem gilt: Der Planpfad kommt bevorzugt aus den Argumenten des Ausführungs-Skills, Bash-Befehle des Hauptloops zählen wie Read/Write/Edit, und abgehakte Checkboxen sind eine zweite Status-Quelle neben der Task-Liste.
+- **Zweiter Nachtrag (2026-10-27):** Nach dem Testlauf mit dem Mini-Plan soll das Pane in der Mitte geteilt sein, eine Hälfte Dateibaum, eine Hälfte Plan. Der Plan-Bereich ist im Terminal deshalb nicht mehr so hoch wie seine Tasks, sondern belegt fest die untere Hälfte. Die Trennlinie bleibt dadurch an derselben Stelle, wie viele Tasks der Plan auch hat.
 - **Kurzer Hinweis an Claude.** Solange ein Plan aktiv ist, ergänzt der Mod per `prompt.compose` den System-Prompt um eine Namenskonvention für die Tasks, damit sie sich zuverlässig zuordnen lassen.
 
 ## Architektur
@@ -97,7 +98,7 @@ Ohne aktiven Plan läuft `next(e)` unverändert durch.
 
 ## Darstellung
 
-Ganz unten im Files-Pane, unter der Fußzeile (`selected:` / Git-Status). Ohne aktiven Plan fehlt der Bereich, und das Pane bleibt unverändert.
+Die untere Hälfte des Files-Panes, unter der Fußzeile (`selected:` / Git-Status), die zur oberen Hälfte beim Dateibaum gehört. Die Kopfzeile des Plans ist die Trennlinie. Ohne aktiven Plan fehlt der Bereich, und das Pane bleibt unverändert.
 
 ```
 │── Plan 2/5 · Auth-Refactor ──│
@@ -116,7 +117,7 @@ Ganz unten im Files-Pane, unter der Fußzeile (`selected:` / Git-Status). Ohne a
   - Sammelzeilen gedämpft
 - **Farben:** nur Palette-Indizes und Theme-Farben, keine neuen Hex-Werte. So bleibt `bun scripts/contrast.ts` grün (Regel aus `AGENTS.md`).
 - **Symbole:** immer Unicode (`✓ ▶ ○ ⋮`), unabhängig von der Glyph-Einstellung.
-- **Höhe im Terminal:** Kopfzeile plus `max(3, floor(bodyRows / 3) - 1)` Task-Zeilen, höchstens so viele wie der Plan Tasks hat. Diese Zeilen kommen zu `chrome` und `fixed` hinzu, sodass Baum und Split-Ansicht (Treemap/Peek) entsprechend kleiner werden. Der Baum behält seine Untergrenze von 5 Zeilen: die Task-Zeilen werden auf `bodyRows - Chrome ohne Plan - 5 - 1` (Kopfzeile) gekürzt, und passen weniger als drei (bzw. weniger als der Plan hat) hinein, entfällt der Abschnitt.
+- **Höhe im Terminal:** die untere Hälfte, also `floor(bodyRows / 2)` Zeilen: Kopfzeile plus `floor(bodyRows / 2) - 1` Task-Zeilen. Hat der Plan weniger Tasks, bleibt der Rest leer, damit die Trennlinie in der Mitte bleibt. Diese Zeilen kommen zu `chrome` und `fixed` hinzu, sodass Baum und Split-Ansicht (Treemap/Peek) in der oberen Hälfte Platz finden müssen. Der Baum behält seine Untergrenze von 5 Zeilen: die Task-Zeilen werden auf `bodyRows - Chrome ohne Plan - 5 - 1` (Kopfzeile) gekürzt, der Bereich ist dann kleiner als die Hälfte, und passen weniger als drei (bzw. weniger als der Plan hat) hinein, entfällt der Abschnitt.
 - **Desktop** (`nativeScroll`): alle Tasks ohne Fenster, am Ende der Liste.
 - **Keine Interaktion:** Der Bereich enthält keine Buttons, und Fokus sowie Tastenkürzel des Panes bleiben unverändert.
 
