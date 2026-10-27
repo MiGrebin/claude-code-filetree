@@ -7,6 +7,7 @@ export type PlanLine = TaskLine | SummaryLine
 export const PLAN_GLYPH: Record<PlanStatus, string> = { completed: '✓', in_progress: '▶', pending: '○' }
 
 const PLAN_FILE = /\/docs\/superpowers\/plans\/[^/]+\.md$/
+const PLAN_TOKEN = /(?:^|\/)docs\/superpowers\/plans\/[^/]+\.md$/
 const EXECUTE_SKILL = /^(?:superpowers:)?(?:subagent-driven-development|executing-plans)$/
 const HEADING = /^#{2,4}\s+(?:Task|Aufgabe)\s+([A-Za-z]?\d+[A-Za-z]?)\s*[:.–—-]\s*(.+?)\s*$/
 const FENCE = /^\s*(`{3,}|~{3,})/
@@ -22,6 +23,21 @@ export function isPlanFile(path: string): boolean {
 
 export function isExecuteSkill(skill: string): boolean {
   return EXECUTE_SKILL.test(skill.trim())
+}
+
+export function planPaths(text: string, cwd: string): string[] {
+  const out: string[] = []
+  for (const raw of text.split(/[\s'"`=();&|<>]+/)) {
+    const token = raw.replace(/[.,:;!?]+$/, '').replace(/\\/g, '/')
+    if (!PLAN_TOKEN.test(token)) continue
+    const path = /^(?:\/|[A-Za-z]:\/)/.test(token) ? token : `${cwd.replace(/\/+$/, '')}/${token.replace(/^(?:\.\/)+/, '')}`
+    if (!out.includes(path)) out.push(path)
+  }
+  return out
+}
+
+export function argumentsOf(text: string): string {
+  return [...text.matchAll(/^ARGUMENTS:[ \t]*(.*)$/gm)].pop()?.[1]?.trim() ?? ''
 }
 
 export function parsePlan(markdown: string, path = ''): { title: string; tasks: PlanTask[]; checks: Record<string, [number, number]> } {

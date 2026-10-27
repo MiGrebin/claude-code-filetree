@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Plan, PlanStatus, PlanTask } from '../types'
-import { doneCount, isExecuteSkill, isPlanFile, matchTask, parsePlan, type PlanLine, planHeading, planHint, planWindow, statuses, summaryLabel } from '../hooks/plan'
+import { argumentsOf, doneCount, isExecuteSkill, isPlanFile, matchTask, parsePlan, type PlanLine, planHeading, planHint, planPaths, planWindow, statuses, summaryLabel } from '../hooks/plan'
 
 const PLAN = [
   '# Werkbank-API Revisionen – Implementierungsplan (PIM)',
@@ -82,6 +82,20 @@ test('isPlanFile and isExecuteSkill recognise superpowers plans and the skills t
   expect(isPlanFile('/r/docs/superpowers/plans/x.txt')).toBe(false)
   for (const skill of ['superpowers:subagent-driven-development', 'subagent-driven-development', 'superpowers:executing-plans', 'executing-plans']) expect(isExecuteSkill(skill)).toBe(true)
   for (const skill of ['superpowers:writing-plans', 'superpowers:brainstorming', 'executing-plans-extra']) expect(isExecuteSkill(skill)).toBe(false)
+})
+
+test('planPaths finds plan files named in a shell command or skill arguments, resolved against the cwd', () => {
+  expect(planPaths(`P=docs/superpowers/plans/2026-10-27-mini.md && cat "$P" && sed -i '' '22s/a/b/' "./docs/superpowers/plans/2026-10-27-mini.md"`, '/r'))
+    .toEqual(['/r/docs/superpowers/plans/2026-10-27-mini.md'])
+  expect(planPaths('cat /abs/docs/superpowers/plans/a.md docs/superpowers/plans/b.md.', '/r/'))
+    .toEqual(['/abs/docs/superpowers/plans/a.md', '/r/docs/superpowers/plans/b.md'])
+  expect(planPaths('see docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md and docs/superpowers/specs/x.md', '/r')).toEqual([])
+  expect(planPaths('', '/r')).toEqual([])
+})
+
+test('argumentsOf returns the last ARGUMENTS line of an expanded skill prompt', () => {
+  expect(argumentsOf('# Skill\nUse ARGUMENTS: like this inline\n\nARGUMENTS: docs/superpowers/plans/x.md – go')).toBe('docs/superpowers/plans/x.md – go')
+  expect(argumentsOf('# Skill without arguments')).toBe('')
 })
 
 test('matchTask finds the plan task by its number first, then by its exact title', () => {
