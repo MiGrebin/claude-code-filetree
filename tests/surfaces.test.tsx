@@ -2612,6 +2612,7 @@ function planWorld(on: any, ran: Ran, extra: { rootFiles?: [string, 'file' | 'di
 }
 
 const COMPOSE = { model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as any
+// the test `$` has no `state` noun, so this keeps the last filetree/plan write; planWorld resets it (tests run serially)
 let planValue: Plan | undefined
 
 async function planOf(_$: any): Promise<Plan> {
