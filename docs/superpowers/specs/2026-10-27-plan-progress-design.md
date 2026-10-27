@@ -72,7 +72,8 @@ Berücksichtigt werden nur Aufrufe des Hauptloops: Ein `tool.call` mit `agentId`
 | Tool | Wirkung |
 | --- | --- |
 | `Read`, `Write`, `Edit` auf eine Plan-Datei | `candidate = path`. Ist `pick` gesetzt → aktivieren; nur wenn die Datei Tasks hat, wird `pick = false` (eine Datei ohne Tasks, etwa ein Index, verbraucht ihn nicht). Sonst, wenn es der aktive Plan ist → neu parsen. |
-| `Bash` (auch wenn der Befehl fehlschlägt; nur ein `deny` zählt nicht) | Jeder Planpfad im Befehl (`planPaths`) wird behandelt wie ein Read derselben Datei. Danach wird der aktive Plan neu eingelesen, wenn sich seine Änderungszeit (`mtime`) geändert hat, etwa weil `sed` Checkboxen abgehakt hat. |
+| `Bash` (auch wenn der Befehl fehlschlägt; nur ein `deny` zählt nicht) | Jeder Planpfad im Befehl (`planPaths`) wird behandelt wie ein Read derselben Datei. |
+| `Bash`, `Edit`, `Write`, `NotebookEdit`, `Agent`, auch von Subagents (ein Subagent darf Checkboxen abhaken) | Der aktive Plan wird neu eingelesen, wenn sich seine Änderungszeit (`mtime`) geändert hat, etwa weil `sed` oder ein Edit Checkboxen abgehakt hat. Ein Hook ohne Matcher geht nicht: `register.tsx` hat schon den einzigen erlaubten. |
 | `Skill` mit Ausführungs-Skill, sowie `skill.prompt` für denselben Skill (ein als `/name` getippter Skill löst keinen Tool-Call aus; `skill.prompt` trägt keine `agentId`, Subagents werden dort also nicht gefiltert; der Text bleibt unverändert) | Nennen die Argumente (`args` bzw. die `ARGUMENTS:`-Zeile) einen Plan, der sich aktivieren lässt → genau dieser wird aktiv und `pick = false`. Sonst `pick = true`; gibt es einen `candidate` → aktivieren (`pick` bleibt gesetzt, damit ein danach gelesener anderer Plan übernimmt). |
 | `TaskCreate` | `claude[result.task.id] = { subject, status: 'pending', plan: <aktiver Pfad> }` |
 | `TaskUpdate` | Status bzw. Subject im Spiegel aktualisieren (`plan` bleibt). `deleted` entfernt den Eintrag. |
@@ -86,7 +87,9 @@ Ohne Ausführungs-Skill wird nie ein Plan aktiv. Ein Plan, den Claude nur zum Na
 
 **Hinweis an Claude** (`prompt.compose`): Bei aktivem Plan wird eine Sektion mit `scope: 'session'` angehängt:
 
-> A superpowers plan is being executed: `<path>`. If you coordinate this plan (not a subagent working on a single task), keep exactly one task per plan task with the subject `Task <id>: <title>` (ids as in the plan's headings), set it to in_progress when you start it and completed when it is done.
+> A superpowers plan is being executed: `<path>`. Track its progress in that file: as soon as a step is done, tick its checkbox there (`- [ ]` → `- [x]`), so the plan always shows how far the work is. If you coordinate this plan (not a subagent working on a single task) and task tools are available, also keep exactly one task per plan task with the subject `Task <id>: <title>` (ids as in the plan's headings), in_progress while you work on it and completed when it is done.
+
+Zuerst ging es hier nur um die Task-Liste. Im zweiten echten Lauf zeigte sich, dass diese Claude-Code-Version dem Modell keine Task-Tools (`TaskCreate`/`TaskUpdate`/`TodoWrite`) anbietet. Der Hinweis schickte Claude also ins Leere, und es hakte auch keine Checkboxen ab. Deshalb bittet er jetzt in erster Linie um abgehakte Checkboxen, wie superpowers es für Pläne vorsieht. Die abgehakten Pläne landen dadurch in den Commits.
 
 Der Nebensatz zum Koordinieren steht drin, weil nicht sicher ist, ob Subagents diese Sektion auch bekommen. Sie sollen keine eigenen Plan-Tasks anlegen.
 
