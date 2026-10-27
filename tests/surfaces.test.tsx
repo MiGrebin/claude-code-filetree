@@ -2761,7 +2761,7 @@ async function fileRows(ui: any): Promise<number> {
   return new Set(JSON.stringify(await ui.drawn({ in: 'rows' })).match(/f\d\d\.ts/g) ?? []).size
 }
 
-test('plan progress: the pane draws the plan below the tree and gives up tree rows for it', { timeoutMs: 20_000 }, async ($, on) => {
+test('plan progress: the pane cuts in the middle, the tree above and the plan below, even for a short plan', { timeoutMs: 20_000 }, async ($, on) => {
   const clock = planWorld(on, [], { rootFiles: MANY_FILES })
   await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
   await clock.settle()
@@ -2780,7 +2780,8 @@ test('plan progress: the pane draws the plan below the tree and gives up tree ro
   await clock.settle()
   const shown = await texts(ui)
   for (const text of ['── ', 'Plan 1/3', ' · Auth Refactor ', '✓ ', '▶ ', '○ ', 'Setup', 'Datenmodell', 'API-Endpoint']) expect(shown).toContain(text)
-  expect(await fileRows(ui)).toBe(before - 4)
+  // the plan takes the lower 20 of the 40 body rows, though its heading and three tasks fill only four of them
+  expect(await fileRows(ui)).toBe(before - 20)
   await ui.unmount()
 })
 
@@ -2806,7 +2807,8 @@ test('plan progress: a long plan shows a window around the current task with sum
   const clock = planWorld(on, [])
   await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
   await clock.settle()
-  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  // half of 26 body rows: the heading and a window of 12 rows
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: { ...paneProps(60), scroll: { offset: 0, bodyRows: 26 } } })
   await clock.settle()
   await runPlan($, clock, BIG_PLAN)
   for (let i = 1; i <= 35; i++) await $.tool.call({ tool: 'TaskCreate', subject: `Task ${i}: Teil ${i} Ende`, description: '' } as any)

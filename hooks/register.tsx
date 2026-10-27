@@ -2197,9 +2197,10 @@ export const register: Register = (on, options) => {
     const footer = t.nodes.find(n => n.id === t.cursor)?.id ?? (t.selected || '')
     const tail = (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
     const baseChrome = 1 + (searchGap ? 2 : 0) + 1 + tail
-    const planFit = nativeScroll ? plan.tasks.length : Math.min(Math.max(3, Math.floor(body / 3) - 1), body - baseChrome - 5 - 1)
+    // the plan takes the lower half of the terminal pane, however few tasks it has, short of the tree's five rows
+    const planFit = nativeScroll ? plan.tasks.length : Math.min(Math.floor(body / 2) - 1, body - baseChrome - 5 - 1)
     const planLines = plan.path && planFit >= Math.min(3, plan.tasks.length) ? planWindow(plan.tasks, planStatus, planFit) : []
-    const planRows = planLines.length ? planLines.length + 1 : 0
+    const planRows = !planLines.length ? 0 : nativeScroll ? planLines.length + 1 : planFit + 1
     const chrome = planRows + baseChrome
     const spare = body - chrome - 5
     const splitRows = t.split && !nativeScroll && spare >= 6 && (treemapSetting !== 'off' || Boolean(peekTarget(t))) ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
@@ -2613,7 +2614,7 @@ export const register: Register = (on, options) => {
       const idWidth = Math.max(...plan.tasks.map(x => x.id.length))
       const strong = { bold: true, color: theme.accent }
       return (
-        <Box flexDirection="column">
+        <Box flexDirection="column" height={nativeScroll ? undefined : planRows}>
           <Box flexDirection="row" height={1} overflow="hidden">
             <Text {...mutedText}>{'── '}</Text>
             <Text bold color={theme.accent}>{heading.label}</Text>
