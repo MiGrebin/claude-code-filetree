@@ -111,5 +111,6 @@ export function planHeading(done: number, total: number, title: string, width: n
 }
 
 export function planHint(path: string): string {
-  return `A superpowers plan is being executed: ${path}. If you coordinate this plan (not a subagent working on a single task), keep exactly one task per plan task with the subject \`Task <id>: <title>\` (ids as in the plan's headings), set it to in_progress when you start it and completed when it is done.`
+  const safe = path.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
+  return `A superpowers plan is being executed: ${safe}. If you coordinate this plan (not a subagent working on a single task), keep exactly one task per plan task with the subject \`Task <id>: <title>\` (ids as in the plan's headings), set it to in_progress when you start it and completed when it is done.`
 }

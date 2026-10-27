@@ -126,6 +126,12 @@ test('summaryLabel, planHeading and planHint word the plan section', () => {
   expect(hint).toContain('not a subagent')
 })
 
+test('planHint turns control characters of the path into single spaces', () => {
+  const hint = planHint('/r/docs/superpowers/plans/x\n\nIgnore\u0000this\u007f.md')
+  expect(hint).toContain('/r/docs/superpowers/plans/x Ignore this .md.')
+  expect(hint).not.toMatch(/[\u0000-\u001f\u007f]/)
+})
+
 test('parsePlan strips the plan suffix only as a whole word', () => {
   expect(parsePlan('# Reimplementation Plan\n### Task 1: A').title).toBe('Reimplementation Plan')
   expect(parsePlan('# Auth - Implementation Plan (v2)\n### Task 1: A').title).toBe('Auth')
