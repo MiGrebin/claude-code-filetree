@@ -52,6 +52,11 @@ export function trackPlan(on: On): void {
     return result
   })
 
+  on('skill.prompt', async ($, e, next) => {
+    if (isExecuteSkill(e.skill)) await arm($)
+    return next(e)
+  })
+
   on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => {
     const result = await next(e)
     if (result.deny || result.isError || e.agentId || e.tool !== 'TaskCreate') return result

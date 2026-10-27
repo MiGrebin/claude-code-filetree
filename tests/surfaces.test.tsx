@@ -2593,6 +2593,7 @@ function planWorld(on: any, ran: Ran, extra: { rootFiles?: [string, 'file' | 'di
     if (e.plugin === 'filetree' && e.key === 'plan') planValue = e.value
     return next(e)
   })
+  on('skill.prompt', (_$: any, e: any) => ({ text: e.text }))
   return world(on, {
     os: 'linux', env: { HOME: '/home/k' }, cwd: PLAN_ROOT, top: '', status: '', numstat: '',
     dirs: {
@@ -2644,6 +2645,20 @@ test('plan progress: only an executing skill activates a plan, and the task list
   await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'deleted' } as any)
   await clock.settle()
   expect(statuses(await planOf($))['2']).toBe('pending')
+})
+
+test('plan progress: a typed slash command of an executing skill activates the plan', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await $.tool.call({ tool: 'Read', file_path: AUTH_PLAN } as any)
+  const other = await $.skill.prompt({ skill: 'superpowers:writing-plans', text: 'write' })
+  await clock.settle()
+  expect((await planOf($))?.path ?? '').toBe('')
+  const result = await $.skill.prompt({ skill: 'superpowers:executing-plans', text: 'go' })
+  await clock.settle()
+  expect([other.text, result.text]).toEqual(['write', 'go'])
+  expect((await planOf($)).path).toBe(AUTH_PLAN)
 })
 
 test('plan progress: a plans-dir file without tasks keeps the pick for the real plan', { timeoutMs: 20_000 }, async ($, on) => {
