@@ -68,8 +68,8 @@ Berücksichtigt werden nur Aufrufe des Hauptloops: Ein `tool.call` mit `agentId`
 
 | Tool | Wirkung |
 | --- | --- |
-| `Read`, `Write`, `Edit` auf eine Plan-Datei | `candidate = path`. Ist `pick` gesetzt → aktivieren und `pick = false`. Sonst, wenn es der aktive Plan ist → neu parsen. |
-| `Skill` mit Ausführungs-Skill | `pick = true`. Gibt es einen `candidate` → aktivieren (`pick` bleibt gesetzt, damit ein danach gelesener anderer Plan übernimmt). |
+| `Read`, `Write`, `Edit` auf eine Plan-Datei | `candidate = path`. Ist `pick` gesetzt → aktivieren; nur wenn die Datei Tasks hat, wird `pick = false` (eine Datei ohne Tasks, etwa ein Index, verbraucht ihn nicht). Sonst, wenn es der aktive Plan ist → neu parsen. |
+| `Skill` mit Ausführungs-Skill, sowie `skill.prompt` für denselben Skill (ein als `/name` getippter Skill löst keinen Tool-Call aus; `skill.prompt` trägt keine `agentId`, Subagents werden dort also nicht gefiltert; der Text bleibt unverändert) | `pick = true`. Gibt es einen `candidate` → aktivieren (`pick` bleibt gesetzt, damit ein danach gelesener anderer Plan übernimmt). |
 | `TaskCreate` | `claude[result.task.id] = { subject, status: 'pending', plan: <aktiver Pfad> }` |
 | `TaskUpdate` | Status bzw. Subject im Spiegel aktualisieren (`plan` bleibt). `deleted` entfernt den Eintrag. |
 | `TodoWrite` | Alle Einträge `todo:<i>` durch `todos` ersetzen (`content` → `subject`). `plan` bleibt erhalten, wenn an derselben Stelle derselbe Text stand, sonst wird der aktive Pfad eingetragen. |
@@ -109,7 +109,7 @@ Ganz unten im Files-Pane, unter der Fußzeile (`selected:` / Git-Status). Ohne a
   - Sammelzeilen gedämpft
 - **Farben:** nur Palette-Indizes und Theme-Farben, keine neuen Hex-Werte. So bleibt `bun scripts/contrast.ts` grün (Regel aus `AGENTS.md`).
 - **Symbole:** immer Unicode (`✓ ▶ ○ ⋮`), unabhängig von der Glyph-Einstellung.
-- **Höhe im Terminal:** Kopfzeile plus `max(3, floor(bodyRows / 3) - 1)` Task-Zeilen, höchstens so viele wie der Plan Tasks hat. Diese Zeilen kommen zu `chrome` und `fixed` hinzu, sodass Baum und Split-Ansicht (Treemap/Peek) entsprechend kleiner werden.
+- **Höhe im Terminal:** Kopfzeile plus `max(3, floor(bodyRows / 3) - 1)` Task-Zeilen, höchstens so viele wie der Plan Tasks hat. Diese Zeilen kommen zu `chrome` und `fixed` hinzu, sodass Baum und Split-Ansicht (Treemap/Peek) entsprechend kleiner werden. Der Baum behält seine Untergrenze von 5 Zeilen: die Task-Zeilen werden auf `bodyRows - Chrome ohne Plan - 5 - 1` (Kopfzeile) gekürzt, und passen weniger als drei (bzw. weniger als der Plan hat) hinein, entfällt der Abschnitt.
 - **Desktop** (`nativeScroll`): alle Tasks ohne Fenster, am Ende der Liste.
 - **Keine Interaktion:** Der Bereich enthält keine Buttons, und Fokus sowie Tastenkürzel des Panes bleiben unverändert.
 
