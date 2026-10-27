@@ -164,6 +164,8 @@ test('summaryLabel, planHeading and planHint word the plan section', () => {
   expect(hint).toContain('/r/docs/superpowers/plans/x.md')
   expect(hint).toContain('`Task <id>: <title>`')
   expect(hint).toContain('not a subagent')
+  expect(hint).toContain('tick its checkbox')
+  expect(hint).toContain('`- [ ]` → `- [x]`')
 })
 
 test('planHint turns control characters of the path into single spaces', () => {

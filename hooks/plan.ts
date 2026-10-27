@@ -148,5 +148,5 @@ export function planHeading(done: number, total: number, title: string, width: n
 
 export function planHint(path: string): string {
   const safe = path.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
-  return `A superpowers plan is being executed: ${safe}. If you coordinate this plan (not a subagent working on a single task), keep exactly one task per plan task with the subject \`Task <id>: <title>\` (ids as in the plan's headings), set it to in_progress when you start it and completed when it is done.`
+  return `A superpowers plan is being executed: ${safe}. Track its progress in that file: as soon as a step is done, tick its checkbox there (\`- [ ]\` → \`- [x]\`), so the plan always shows how far the work is. If you coordinate this plan (not a subagent working on a single task) and task tools are available, also keep exactly one task per plan task with the subject \`Task <id>: <title>\` (ids as in the plan's headings), in_progress while you work on it and completed when it is done.`
 }
