@@ -34,11 +34,11 @@ Während Claude einen superpowers-Plan ausführt (`subagent-driven-development` 
 2. Sonst vergleicht die Funktion das Subject ohne ein führendes `Task <id>:` normalisiert mit den Plan-Titeln: Kleinschreibung, ohne Backticks und Satzzeichen, Leerraum zusammengefasst. Nur exakte Gleichheit zählt.
 3. Sonst gibt es keine Zuordnung. Die Brainstorming-Checkliste oder „Final review“ bleiben damit außen vor.
 
-**Status (`statuses`).** Jede Claude-Task, die nicht in `stale` steht und sich zuordnen lässt, setzt den Status ihrer Plan-Task. Ordnen sich mehrere Claude-Tasks derselben Plan-Task zu, gilt die Rangfolge `in_progress` > `completed` > `pending`. Plan-Tasks ohne Zuordnung sind `pending`.
+**Status (`statuses`).** Es zählen nur Claude-Tasks, die unter diesem Plan angelegt wurden (`plan` gleich dem aktiven Pfad) oder bevor überhaupt ein Plan aktiv war (`plan` leer). Jede davon, die sich zuordnen lässt, setzt den Status ihrer Plan-Task. Ordnen sich mehrere Claude-Tasks derselben Plan-Task zu, gilt die Rangfolge `in_progress` > `completed` > `pending`. Plan-Tasks ohne Zuordnung sind `pending`.
 
 **Fenster (`planWindow`).** `PlanLine` ist `{ kind: 'task'; task: PlanTask; status: PlanStatus }` oder `{ kind: 'before' | 'after'; count: number; allDone: boolean }`.
 - Passen alle Tasks in `rows`, werden alle angezeigt.
-- Sonst ist der Anker die erste `in_progress`-Task, ersatzweise die erste nicht erledigte, ersatzweise die letzte. Das Fenster beginnt eine Task vor dem Anker.
+- Sonst ist der Anker die erste `in_progress`-Task, ersatzweise die erste nicht erledigte, ersatzweise die letzte. Das Fenster beginnt eine Task vor dem Anker; bei nur 3 Zeilen beim Anker selbst. Eine Sammelzeile für genau eine Task gibt es nicht, denn dann wird die Task selbst gezeigt.
 - Abgeschnittenes wird zu je einer Sammelzeile oben und unten, die selbst eine Zeile von `rows` belegen. Sind alle Tasks einer Sammelzeile erledigt, ist `allDone` gesetzt (oben `✓ 12 erledigt`). Unten steht `○ 18 weitere`, oben bei gemischtem Status `⋮ 3 davor`.
 - `rows` ist mindestens 3. Der Anker ist immer sichtbar.
 
@@ -49,15 +49,14 @@ Ein neuer Schlüssel `plan` unter `PluginState.filetree`:
 ```ts
 export type PlanStatus = 'pending' | 'in_progress' | 'completed'
 export type PlanTask = { id: string; title: string }
-export type ClaudeTask = { subject: string; status: PlanStatus }
+export type ClaudeTask = { subject: string; status: PlanStatus; plan: string }  // plan: aktiver Pfad beim Anlegen
 export type Plan = {
   candidate: string                      // zuletzt im Hauptloop gelesene/geschriebene Plan-Datei
-  armed: boolean                         // ein Ausführungs-Skill wurde aufgerufen
+  pick: boolean                          // nach einem Ausführungs-Skill: die nächste Plan-Datei wird aktiv
   path: string                           // aktiver Plan, '' wenn keiner
   title: string
   tasks: PlanTask[]
   claude: Record<string, ClaudeTask>     // Spiegel von Claudes Task-Liste
-  stale: string[]                        // Claude-Task-IDs eines früheren Plans
 }
 ```
 
@@ -69,22 +68,23 @@ Berücksichtigt werden nur Aufrufe des Hauptloops: Ein `tool.call` mit `agentId`
 
 | Tool | Wirkung |
 | --- | --- |
-| `Read`, `Write`, `Edit` auf eine Plan-Datei | `candidate = path`. Ist `armed` und (`path` leer oder noch keine Claude-Task dem aktiven Plan zugeordnet) → aktivieren. Ist es der aktive Plan → neu parsen. |
-| `Skill` mit Ausführungs-Skill | `armed = true`. Gibt es einen `candidate` → aktivieren. |
-| `TaskCreate` | `claude[result.task.id] = { subject, status: 'pending' }` |
-| `TaskUpdate` | Status bzw. Subject im Spiegel aktualisieren. `deleted` entfernt den Eintrag. |
-| `TodoWrite` | Alle Einträge `todo:<i>` durch `newTodos` ersetzen (`content` → `subject`). |
+| `Read`, `Write`, `Edit` auf eine Plan-Datei | `candidate = path`. Ist `pick` gesetzt → aktivieren und `pick = false`. Sonst, wenn es der aktive Plan ist → neu parsen. |
+| `Skill` mit Ausführungs-Skill | `pick = true`. Gibt es einen `candidate` → aktivieren (`pick` bleibt gesetzt, damit ein danach gelesener anderer Plan übernimmt). |
+| `TaskCreate` | `claude[result.task.id] = { subject, status: 'pending', plan: <aktiver Pfad> }` |
+| `TaskUpdate` | Status bzw. Subject im Spiegel aktualisieren (`plan` bleibt). `deleted` entfernt den Eintrag. |
+| `TodoWrite` | Alle Einträge `todo:<i>` durch `todos` ersetzen (`content` → `subject`). `plan` bleibt erhalten, wenn an derselben Stelle derselbe Text stand, sonst wird der aktive Pfad eingetragen. |
 
-Den Spiegel pflegt der Mod immer, auch ohne aktiven Plan. Tasks, die kurz vor dem Aktivieren angelegt wurden, zählen dadurch ebenfalls.
+Den Spiegel pflegt der Mod immer, auch ohne aktiven Plan. Tasks, die vor dem ersten Aktivieren angelegt wurden (`plan` leer), zählen für jeden Plan.
 
-**Aktivieren** (`path` → Datei lesen über `$.fs.read`, `parsePlan`):
-- Gleicher Pfad wie der aktive Plan: nur Titel und Tasks neu einlesen, Status bleibt.
-- Anderer Pfad, während schon ein Plan aktiv war: alle aktuellen Schlüssel von `claude` landen in `stale`, damit „Task 1“ des alten Plans nicht als „Task 1“ des neuen zählt.
-- Hat der Plan keine erkennbaren Tasks oder lässt sich die Datei nicht lesen, wird nichts aktiviert und der bisherige Zustand bleibt.
+**Aktivieren** (`path` → Datei lesen über `$.fs.read`, `parsePlan`): setzt `path`, `title` und `tasks`. Der Spiegel bleibt unverändert, denn welche Tasks zählen, ergibt sich aus deren `plan`. „Task 1“ eines früheren Plans zählt also nicht für den neuen, und beim Zurückwechseln ist der Fortschritt wieder da. Hat der Plan keine erkennbaren Tasks oder lässt sich die Datei nicht lesen, wird nichts aktiviert und der bisherige Zustand bleibt.
+
+Ohne Ausführungs-Skill wird nie ein Plan aktiv. Ein Plan, den Claude nur zum Nachschlagen liest oder per `writing-plans` schreibt, erscheint also nicht.
 
 **Hinweis an Claude** (`prompt.compose`): Bei aktivem Plan wird eine Sektion mit `scope: 'session'` angehängt:
 
-> A superpowers plan is being executed: `<path>`. Keep exactly one task per plan task with the subject `Task <id>: <title>` (ids as in the plan's headings), set it to in_progress when you start it and completed when it is done.
+> A superpowers plan is being executed: `<path>`. If you coordinate this plan (not a subagent working on a single task), keep exactly one task per plan task with the subject `Task <id>: <title>` (ids as in the plan's headings), set it to in_progress when you start it and completed when it is done.
+
+Der Nebensatz zum Koordinieren steht drin, weil nicht sicher ist, ob Subagents diese Sektion auch bekommen. Sie sollen keine eigenen Plan-Tasks anlegen.
 
 Ohne aktiven Plan läuft `next(e)` unverändert durch.
 
@@ -128,12 +128,12 @@ Ganz unten im Files-Pane, unter der Fußzeile (`selected:` / Git-Status). Ohne a
 - **`tests/plan.test.ts`** für die reinen Funktionen:
   - `parsePlan`: `##`/`###`/`####`, `Task`/`Aufgabe`, IDs `3`/`P2`/`9R`, Trenner `:`/`–`, Nicht-Tasks (`## Task-Übersicht`, `## Aufgaben`, `#### Teil A`), Überschriften in Code-Blöcken, Titel mit deutschem und englischem Zusatz, fehlende H1
   - `matchTask`: über die ID, über den Titel, ohne Treffer, keine Teiltreffer
-  - `statuses`: Rangfolge, `stale`
+  - `statuses`: Rangfolge, Tasks eines anderen Plans zählen nicht, Tasks ohne Plan zählen
   - `planWindow`: alles passt, Anker in der Mitte, am Anfang und am Ende, keine Task in Arbeit, alles erledigt, Sammelzeilen mit `allDone`
 - **Ablauf-Tests in `tests/surfaces.test.tsx`** (bestehendes `world`-Harness): simulierte Tool-Calls Skill → Read Plan → `TaskCreate` → `TaskUpdate`, geprüft werden der State und das gerenderte Pane. Zusätzlich:
   - Subagent-Calls ändern nichts
   - Read ohne Skill zeigt nichts
-  - Plan-Wechsel markiert alte Tasks als `stale`
+  - Plan-Wechsel: Tasks des alten Plans zählen nicht, beim Zurückwechseln ist der Fortschritt wieder da
   - `TodoWrite`
   - `prompt.compose` hängt die Sektion nur bei aktivem Plan an
   - ohne Plan bleibt das Pane unverändert
