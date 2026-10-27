@@ -127,9 +127,10 @@ This fork adds a section at the bottom of the pane while Claude executes a [supe
 ```
 
 - The tasks come from the plan's headings (`### Task 3: …`, `## Aufgabe 3: …`, ids like `P2` or `9R`), their state from Claude's task list (`TaskCreate`/`TaskUpdate`, or `TodoWrite`), matched by the task number or the exact title
-- A plan only shows after an executing skill ran; plans Claude merely reads or writes stay hidden, and so do calls of subagents
+- A plan only shows after an executing skill ran, whether Claude called it or you typed it as a slash command; plans Claude merely reads or writes stay hidden, and so do calls of subagents
 - While a plan runs, a short section in the system prompt asks Claude to name its tasks `Task <id>: <title>`
-- Long plans show a window around the current task with `✓ n erledigt` and `○ n weitere` summary rows; the tree gives up as many rows
+- Long plans show a window around the current task with `⋮ n davor`, `✓ n erledigt` and `○ n weitere` summary rows; the tree gives up as many rows, and a very short pane leaves the section out
+- The section's labels are German (`erledigt`, `davor`, `weitere`) while the rest of the pane is English
 
 ## Settings
 
