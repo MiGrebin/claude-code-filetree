@@ -2584,11 +2584,25 @@ const AUTH_MD = ['# Auth Refactor Implementation Plan', '', '### Task 1: Setup',
 const OLD_MD = ['# Altplan', '', '## Task 1: Alt', '', '## Task 2: Auch alt', ''].join('\n')
 const BIG_MD = ['# Big', '', ...Array.from({ length: 35 }, (_, i) => `### Task ${i + 1}: Teil ${i + 1} Ende`)].join('\n')
 const INDEX_PLAN = `${PLANS}/README.md`
+const STEPS_PLAN = `${PLANS}/2026-10-27-steps.md`
 const RUN_SKILL = 'superpowers:subagent-driven-development'
+
+// four tasks of three steps each, the first `ticked` steps checked
+function stepsMd(ticked: number): string {
+  const lines = ['# Mini-Testplan Implementation Plan', '']
+  let step = 0
+  for (const [id, title] of [['1', 'Datei eins'], ['2', 'Datei zwei'], ['3', 'Datei drei'], ['4', 'Zusammenfassung']]) {
+    lines.push(`### Task ${id}: ${title}`, '')
+    for (let s = 1; s <= 3; s++) lines.push(`- [${step++ < ticked ? 'x' : ' '}] **Step ${s}**`)
+  }
+  return lines.join('\n')
+}
 
 function planWorld(on: any, ran: Ran, extra: { rootFiles?: [string, 'file' | 'dir'][] } = {}) {
   let id = 0
   planValue = undefined
+  planFiles = { [AUTH_PLAN]: AUTH_MD, [OLD_PLAN]: OLD_MD, [BIG_PLAN]: BIG_MD, [INDEX_PLAN]: '# Plans\n\nNothing to do here.\n', [STEPS_PLAN]: stepsMd(0) }
+  planMtimes = {}
   on('state.set', (_$: any, e: any, next: any) => {
     if (e.plugin === 'filetree' && e.key === 'plan') planValue = e.value
     return next(e)
@@ -2600,18 +2614,23 @@ function planWorld(on: any, ran: Ran, extra: { rootFiles?: [string, 'file' | 'di
       [PLAN_ROOT]: [['docs', 'dir'], ...(extra.rootFiles ?? [])],
       [`${PLAN_ROOT}/docs`]: [['superpowers', 'dir']],
       [`${PLAN_ROOT}/docs/superpowers`]: [['plans', 'dir']],
-      [PLANS]: [['2026-09-01-old.md', 'file'], ['2026-10-27-auth.md', 'file'], ['2026-10-27-big.md', 'file']],
+      [PLANS]: [['2026-09-01-old.md', 'file'], ['2026-10-27-auth.md', 'file'], ['2026-10-27-big.md', 'file'], ['2026-10-27-steps.md', 'file']],
     },
-    files: { [AUTH_PLAN]: AUTH_MD, [OLD_PLAN]: OLD_MD, [BIG_PLAN]: BIG_MD, [INDEX_PLAN]: '# Plans\n\nNothing to do here.\n' },
+    files: planFiles,
+    mtimes: planMtimes,
     tool: (e: any) =>
       e.tool === 'TaskCreate' ? { result: { task: { id: String(++id), subject: e.subject } } }
       : e.tool === 'TaskUpdate' ? { result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }
       : e.tool === 'Skill' ? { result: { success: true, commandName: e.skill } }
       : { result: {} },
-  }, ran)
+  } as World & { mtimes: Record<string, number> }, ran)
 }
 
-const COMPOSE = { model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as any
+// the plan files and mtimes planWorld serves; a test changes them to stand for an edit made through the shell
+let planFiles: Record<string, string> = {}
+let planMtimes: Record<string, number> = {}
+
+const COMPOSE ={ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as any
 // the test `$` has no `state` noun, so this keeps the last filetree/plan write; planWorld resets it (tests run serially)
 let planValue: Plan | undefined
 
@@ -2812,4 +2831,38 @@ test('plan progress: the desktop pane lists every task of a long plan', { timeou
   for (const text of ['Plan 0/35', 'Teil 1 Ende', 'Teil 35 Ende']) expect(shown).toContain(text)
   expect(shown).not.toContain('weitere')
   await ui.unmount()
+})
+
+test('plan progress: a typed executing skill naming the plan, a shell cat and checkboxes ticked by sed show the progress', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await $.skill.prompt({ skill: 'superpowers:executing-plans', text: 'Load the plan from docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md.\n\nARGUMENTS: docs/superpowers/plans/2026-10-27-steps.md – Test-Repo, direkt auf main' } as any)
+  await clock.settle()
+  expect((await planOf($)).path).toBe(STEPS_PLAN)
+  await $.tool.call({ tool: 'Bash', command: 'cat docs/superpowers/plans/2026-10-27-steps.md' } as any)
+  planFiles[STEPS_PLAN] = stepsMd(5)
+  planMtimes[STEPS_PLAN] = 1_800_000_000_100
+  await $.tool.call({ tool: 'Bash', command: `sed -i '' '9s/- \\[ \\]/- [x]/' "$P"` } as any)
+  await clock.settle()
+  expect(statuses(await planOf($))).toEqual({ '1': 'completed', '2': 'in_progress', '3': 'pending', '4': 'pending' })
+  const shown = await texts(ui)
+  for (const text of ['Plan 1/4', ' · Mini-Testplan ', '✓ ', '▶ ', 'Datei eins', 'Datei zwei', 'Zusammenfassung']) expect(shown).toContain(text)
+  await ui.unmount()
+})
+
+test('plan progress: after an executing skill without arguments a plan read through the shell becomes active, a subagent shell does not count', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL } as any)
+  await $.tool.call({ tool: 'Bash', command: `cat ${OLD_PLAN}`, agentId: 'a1' } as any)
+  await clock.settle()
+  expect((await planOf($))?.path ?? '').toBe('')
+  await $.tool.call({ tool: 'Bash', command: 'cat docs/superpowers/plans/2026-10-27-auth.md | head -40' } as any)
+  await clock.settle()
+  const plan = await planOf($)
+  expect([plan.path, plan.candidate, plan.pick]).toEqual([AUTH_PLAN, AUTH_PLAN, false])
 })
