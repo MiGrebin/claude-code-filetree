@@ -7,9 +7,11 @@ export type PlanLine = TaskLine | SummaryLine
 export const PLAN_GLYPH: Record<PlanStatus, string> = { completed: '✓', in_progress: '▶', pending: '○' }
 
 const PLAN_FILE = /\/docs\/superpowers\/plans\/[^/]+\.md$/
+const PLAN_TOKEN = /(?:^|\/)docs\/superpowers\/plans\/[^/]+\.md$/
 const EXECUTE_SKILL = /^(?:superpowers:)?(?:subagent-driven-development|executing-plans)$/
 const HEADING = /^#{2,4}\s+(?:Task|Aufgabe)\s+([A-Za-z]?\d+[A-Za-z]?)\s*[:.–—-]\s*(.+?)\s*$/
 const FENCE = /^\s*(`{3,}|~{3,})/
+const CHECKBOX = /^\s*[-*]\s+\[([ xX])\]/
 const MENTION = /\b(?:Task|Aufgabe)\s+([A-Za-z]?\d+[A-Za-z]?)\b/i
 const PREFIX = /^\s*(?:Task|Aufgabe)\s+[A-Za-z]?\d+[A-Za-z]?\s*[:.–—-]?\s*/i
 const SUFFIX = /\s*[–—-]?\s*\b(?:Implementation Plan|Implementierungsplan)\s*(?:\([^)]*\))?\s*$/i
@@ -23,10 +25,27 @@ export function isExecuteSkill(skill: string): boolean {
   return EXECUTE_SKILL.test(skill.trim())
 }
 
-export function parsePlan(markdown: string, path = ''): { title: string; tasks: PlanTask[] } {
+export function planPaths(text: string, cwd: string): string[] {
+  const out: string[] = []
+  for (const raw of text.split(/[\s'"`=();&|<>]+/)) {
+    const token = raw.replace(/[.,:;!?]+$/, '').replace(/\\/g, '/')
+    if (!PLAN_TOKEN.test(token)) continue
+    const path = /^(?:\/|[A-Za-z]:\/)/.test(token) ? token : `${cwd.replace(/\/+$/, '')}/${token.replace(/^(?:\.\/)+/, '')}`
+    if (!out.includes(path)) out.push(path)
+  }
+  return out
+}
+
+export function argumentsOf(text: string): string {
+  return [...text.matchAll(/^ARGUMENTS:[ \t]*(.*)$/gm)].pop()?.[1]?.trim() ?? ''
+}
+
+export function parsePlan(markdown: string, path = ''): { title: string; tasks: PlanTask[]; checks: Record<string, [number, number]> } {
   let title = ''
   let fence = ''
+  let current: { id: string; level: number } | null = null
   const tasks: PlanTask[] = []
+  const checks: Record<string, [number, number]> = {}
   for (const line of markdown.split(/\r?\n/)) {
     const mark = FENCE.exec(line)?.[1]
     if (mark) {
@@ -37,9 +56,21 @@ export function parsePlan(markdown: string, path = ''): { title: string; tasks: 
     if (fence) continue
     if (!title && /^#\s+/.test(line)) title = line.replace(/^#\s+/, '').replace(SUFFIX, '').trim()
     const m = HEADING.exec(line)
-    if (m?.[1] && m[2]) tasks.push({ id: m[1], title: m[2] })
+    const level = /^(#{1,6})\s/.exec(line)?.[1]?.length
+    if (m?.[1] && m[2] && level) {
+      tasks.push({ id: m[1], title: m[2] })
+      checks[m[1]] = [0, 0]
+      current = { id: m[1], level }
+      continue
+    }
+    if (current && level !== undefined && level <= current.level) current = null
+    const box = CHECKBOX.exec(line)?.[1]
+    if (current && box) {
+      const [done, total] = checks[current.id] ?? [0, 0]
+      checks[current.id] = [done + (box === ' ' ? 0 : 1), total + 1]
+    }
   }
-  return { title: title || fileTitle(path), tasks }
+  return { title: title || fileTitle(path), tasks, checks }
 }
 
 function fileTitle(path: string): string {
@@ -68,6 +99,11 @@ export function statuses(plan: Plan): Record<string, PlanStatus> {
     if (task.plan && task.plan !== plan.path) continue
     const id = matchTask(task.subject, plan.tasks)
     if (id !== undefined && RANK[task.status] > RANK[out[id] ?? 'pending']) out[id] = task.status
+  }
+  for (const { id } of plan.tasks) {
+    const [done, total] = plan.checks[id] ?? [0, 0]
+    const ticked: PlanStatus = total > 0 && done === total ? 'completed' : done > 0 ? 'in_progress' : 'pending'
+    if (RANK[ticked] > RANK[out[id] ?? 'pending']) out[id] = ticked
   }
   return out
 }
@@ -112,5 +148,5 @@ export function planHeading(done: number, total: number, title: string, width: n
 
 export function planHint(path: string): string {
   const safe = path.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
-  return `A superpowers plan is being executed: ${safe}. If you coordinate this plan (not a subagent working on a single task), keep exactly one task per plan task with the subject \`Task <id>: <title>\` (ids as in the plan's headings), set it to in_progress when you start it and completed when it is done.`
+  return `A superpowers plan is being executed: ${safe}. Track its progress in that file: as soon as a step is done, tick its checkbox there (\`- [ ]\` → \`- [x]\`), so the plan always shows how far the work is. If you coordinate this plan (not a subagent working on a single task) and task tools are available, also keep exactly one task per plan task with the subject \`Task <id>: <title>\` (ids as in the plan's headings), in_progress while you work on it and completed when it is done.`
 }

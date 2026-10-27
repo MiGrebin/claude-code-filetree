@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Plan, PlanStatus, PlanTask } from '../types'
-import { doneCount, isExecuteSkill, isPlanFile, matchTask, parsePlan, type PlanLine, planHeading, planHint, planWindow, statuses, summaryLabel } from '../hooks/plan'
+import { argumentsOf, doneCount, isExecuteSkill, isPlanFile, matchTask, parsePlan, type PlanLine, planHeading, planHint, planPaths, planWindow, statuses, summaryLabel } from '../hooks/plan'
 
 const PLAN = [
   '# Werkbank-API Revisionen – Implementierungsplan (PIM)',
@@ -43,7 +43,28 @@ test('parsePlan reads the title and every task heading outside code blocks', () 
       { id: '9R', title: 'Branch from origin/main' },
       { id: '10', title: 'Dialog und Darstellung' },
     ],
+    checks: { '1': [0, 1], '2': [0, 0], P3: [0, 0], '9R': [0, 0], '10': [0, 0] },
   })
+})
+
+test('parsePlan counts the ticked steps of each task, outside code blocks and up to the next heading of its level', () => {
+  const md = [
+    '# P',
+    '### Task 1: Eins',
+    '- [x] **Step 1: a**',
+    '- [X] **Step 2: b**',
+    '### Task 2: Zwei',
+    '- [x] **Step 1: a**',
+    '```markdown',
+    '- [x] im Beispiel',
+    '```',
+    '- [ ] **Step 2: b**',
+    '  - [ ] eingerückt',
+    '### Task 3: Drei',
+    '## Nach dem Plan',
+    '- [x] gehört zu keiner Task',
+  ].join('\n')
+  expect(parsePlan(md).checks).toEqual({ '1': [2, 2], '2': [1, 3], '3': [0, 0] })
 })
 
 test('parsePlan strips the plan suffix from the title and falls back to the file name', () => {
@@ -63,6 +84,20 @@ test('isPlanFile and isExecuteSkill recognise superpowers plans and the skills t
   for (const skill of ['superpowers:writing-plans', 'superpowers:brainstorming', 'executing-plans-extra']) expect(isExecuteSkill(skill)).toBe(false)
 })
 
+test('planPaths finds plan files named in a shell command or skill arguments, resolved against the cwd', () => {
+  expect(planPaths(`P=docs/superpowers/plans/2026-10-27-mini.md && cat "$P" && sed -i '' '22s/a/b/' "./docs/superpowers/plans/2026-10-27-mini.md"`, '/r'))
+    .toEqual(['/r/docs/superpowers/plans/2026-10-27-mini.md'])
+  expect(planPaths('cat /abs/docs/superpowers/plans/a.md docs/superpowers/plans/b.md.', '/r/'))
+    .toEqual(['/abs/docs/superpowers/plans/a.md', '/r/docs/superpowers/plans/b.md'])
+  expect(planPaths('see docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md and docs/superpowers/specs/x.md', '/r')).toEqual([])
+  expect(planPaths('', '/r')).toEqual([])
+})
+
+test('argumentsOf returns the last ARGUMENTS line of an expanded skill prompt', () => {
+  expect(argumentsOf('# Skill\nUse ARGUMENTS: like this inline\n\nARGUMENTS: docs/superpowers/plans/x.md – go')).toBe('docs/superpowers/plans/x.md – go')
+  expect(argumentsOf('# Skill without arguments')).toBe('')
+})
+
 test('matchTask finds the plan task by its number first, then by its exact title', () => {
   expect(matchTask('Task 1: Setup', TASKS)).toBe('1')
   expect(matchTask('Implement task p3', TASKS)).toBe('P3')
@@ -75,11 +110,16 @@ test('matchTask finds the plan task by its number first, then by its exact title
   expect(matchTask('', TASKS)).toBeUndefined()
 })
 
-const plan = (claude: Plan['claude'], path = '/p/a.md'): Plan => ({ candidate: path, pick: false, path, title: 'A', tasks: TASKS, claude })
+const plan = (claude: Plan['claude'], path = '/p/a.md', checks: Plan['checks'] = {}): Plan => ({ candidate: path, pick: false, path, title: 'A', tasks: TASKS, claude, checks, mtime: 0 })
 const many = (n: number): PlanTask[] => Array.from({ length: n }, (_, i) => ({ id: String(i + 1), title: `T${i + 1}` }))
 const marks = (n: number, fn: (id: number) => PlanStatus): Record<string, PlanStatus> => Object.fromEntries(Array.from({ length: n }, (_, i) => [String(i + 1), fn(i + 1)]))
 const range = (from: number, to: number, mark: string) => Array.from({ length: to - from + 1 }, (_, i) => `${mark}${from + i}`)
 const shape = (lines: PlanLine[]) => lines.map(l => (l.kind === 'task' ? `${l.status[0]}${l.task.id}` : `${l.kind}:${l.count}${l.allDone ? '✓' : ''}`))
+
+test('statuses reads ticked checkboxes: all steps ticked is completed, some ticked is in_progress', () => {
+  expect(statuses(plan({}, '/p/a.md', { '1': [2, 2], '2': [1, 3], P3: [0, 0] }))).toEqual({ '1': 'completed', '2': 'in_progress', P3: 'pending' })
+  expect(statuses(plan({ a: { subject: 'Task 1', status: 'in_progress', plan: '/p/a.md' } }, '/p/a.md', { '1': [2, 2] }))['1']).toBe('in_progress')
+})
 
 test('statuses ranks in_progress over completed over pending and counts only tasks of this plan', () => {
   expect(statuses(plan({
@@ -124,6 +164,8 @@ test('summaryLabel, planHeading and planHint word the plan section', () => {
   expect(hint).toContain('/r/docs/superpowers/plans/x.md')
   expect(hint).toContain('`Task <id>: <title>`')
   expect(hint).toContain('not a subagent')
+  expect(hint).toContain('tick its checkbox')
+  expect(hint).toContain('`- [ ]` → `- [x]`')
 })
 
 test('planHint turns control characters of the path into single spaces', () => {
