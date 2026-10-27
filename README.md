@@ -115,7 +115,7 @@ Resize the pane with the mouse or the `pane:grow` and `pane:shrink` keybindings.
 
 ### Plan progress (fork)
 
-This fork adds a section at the bottom of the pane while Claude executes a [superpowers](https://github.com/obra/superpowers) plan with `subagent-driven-development` or `executing-plans`:
+This fork cuts the pane in the middle while Claude executes a [superpowers](https://github.com/obra/superpowers) plan with `subagent-driven-development` or `executing-plans`: the tree keeps the upper half and the plan takes the lower half:
 
 ```text
 ── Plan 2/5 · Auth Refactor ─────────
@@ -130,7 +130,7 @@ This fork adds a section at the bottom of the pane while Claude executes a [supe
 - A plan only shows after an executing skill ran, whether Claude called it or you typed it as a slash command; the plan named in the skill's arguments wins, otherwise the next plan file Claude reads, edits or touches in a shell command. Plans Claude merely reads or writes stay hidden, and so do calls of subagents
 - Edits made through the shell (`sed -i` on the checkboxes) show up after the command, as the pane re-reads the plan when its file changed
 - While a plan runs, a short section in the system prompt asks Claude to tick each step's checkbox in the plan file as soon as it is done (the ticked plan ends up in the commits), and, where task tools exist, to name its tasks `Task <id>: <title>`
-- Long plans show a window around the current task with `⋮ n davor`, `✓ n erledigt` and `○ n weitere` summary rows; the tree gives up as many rows, and a very short pane leaves the section out
+- In the terminal the plan keeps the lower half however few tasks it has, so the cut stays in the middle; long plans show a window around the current task with `⋮ n davor`, `✓ n erledigt` and `○ n weitere` summary rows, and a short pane shrinks the plan to keep five tree rows or leaves it out
 - The section's labels are German (`erledigt`, `davor`, `weitere`) while the rest of the pane is English
 
 ## Settings
