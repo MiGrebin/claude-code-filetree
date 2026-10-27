@@ -13,6 +13,7 @@ import { boxLook, fitPixels, inkOn, over, paint, type PixelLook, png, readable, 
 import { CELL_PROBE, colorOf, GHOSTTY_ARGS, parseGhostty, type TermColors } from './term'
 import type { ZoneProps } from './zone'
 import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
+import { trackPlan } from './progress'
 import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR } from './icons'
 import {
   age,
@@ -1968,6 +1969,8 @@ export const register: Register = (on, options) => {
       void touched($, names.map(f => resolve(cwd, posix(f), home)), 'purple', true)
       return result
     })
+
+  trackPlan(on)
 
   on('ui.message', async ($, e, next) => {
     if (e.requestId === PANE && e.element.startsWith('button-') && e.data && typeof e.data === 'object') {

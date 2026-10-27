@@ -93,6 +93,7 @@ declare module 'claude-code' {
       tree: FileTree
       theme: Theme
       activity: Activity[]
+      plan: Plan
     }
   }
 }
