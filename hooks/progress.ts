@@ -70,7 +70,13 @@ export function trackPlan(on: On): void {
     const result = await next(e)
     if (result.deny || e.agentId || e.tool !== 'Bash') return result
     for (const path of planPaths(e.command, posix(await $.session.cwd()))) await touch($, path)
-    await refresh($)
+    return result
+  })
+
+  // A call that writes files, a subagent's too, may have ticked checkboxes in the active plan.
+  on('tool.call', { tool: ['Bash', 'Edit', 'Write', 'NotebookEdit', 'Agent'] }, async ($, e, next) => {
+    const result = await next(e)
+    if (!result.deny) await refresh($)
     return result
   })
 

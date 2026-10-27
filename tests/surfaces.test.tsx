@@ -2866,3 +2866,17 @@ test('plan progress: after an executing skill without arguments a plan read thro
   const plan = await planOf($)
   expect([plan.path, plan.candidate, plan.pick]).toEqual([AUTH_PLAN, AUTH_PLAN, false])
 })
+
+test('plan progress: checkboxes a subagent ticks in the active plan show after its tool call', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL, args: STEPS_PLAN } as any)
+  await clock.settle()
+  expect((await planOf($)).path).toBe(STEPS_PLAN)
+  planFiles[STEPS_PLAN] = stepsMd(3)
+  planMtimes[STEPS_PLAN] = 1_800_000_000_200
+  await $.tool.call({ tool: 'Edit', file_path: STEPS_PLAN, old_string: '- [ ]', new_string: '- [x]', agentId: 'a1' } as any)
+  await clock.settle()
+  expect(statuses(await planOf($))).toEqual({ '1': 'completed', '2': 'pending', '3': 'pending', '4': 'pending' })
+})
