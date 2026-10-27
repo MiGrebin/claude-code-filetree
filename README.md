@@ -113,6 +113,25 @@ Space:        Quick Look on macOS
 
 Resize the pane with the mouse or the `pane:grow` and `pane:shrink` keybindings.
 
+### Plan progress (fork)
+
+This fork adds a section at the bottom of the pane while Claude executes a [superpowers](https://github.com/obra/superpowers) plan with `subagent-driven-development` or `executing-plans`:
+
+```text
+── Plan 2/5 · Auth Refactor ─────────
+✓ 1  Setup
+✓ 2  Datenmodell
+▶ 3  API-Endpoint
+○ 4  UI
+○ 5  Tests
+```
+
+- The tasks come from the plan's headings (`### Task 3: …`, `## Aufgabe 3: …`, ids like `P2` or `9R`), their state from Claude's task list (`TaskCreate`/`TaskUpdate`, or `TodoWrite`), matched by the task number or the exact title
+- A plan only shows after an executing skill ran, whether Claude called it or you typed it as a slash command; plans Claude merely reads or writes stay hidden, and so do calls of subagents
+- While a plan runs, a short section in the system prompt asks Claude to name its tasks `Task <id>: <title>`
+- Long plans show a window around the current task with `⋮ n davor`, `✓ n erledigt` and `○ n weitere` summary rows; the tree gives up as many rows, and a very short pane leaves the section out
+- The section's labels are German (`erledigt`, `davor`, `weitere`) while the rest of the pane is English
+
 ## Settings
 
 All settings are in `/config` under filetree, each with its own description there.

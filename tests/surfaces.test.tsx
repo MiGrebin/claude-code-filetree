@@ -2,7 +2,9 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { LINUX_LAUNCH, TMUX_OPEN, TMUX_WORKSPACE } from '../hooks/open'
 import { CLEAN, POLICY, POSTER } from '../hooks/peek'
+import { statuses } from '../hooks/plan'
 import { age, ancestorsOf, formatSize, replaceChildren, toNodes } from '../hooks/tree'
+import type { Plan } from '../types'
 
 type World = {
   os: 'darwin' | 'linux' | 'win32'
@@ -2570,5 +2572,244 @@ test('files added and removed outside Claude show in the tree and the treemap wi
   expect(after).not.toContain('a.ts')
   expect(JSON.stringify(mapOf(await ui.drawn()))).toContain(`"tab":"${root}/shell.bin"`)
   expect(ran.filter(a => a[0] === 'inotifywait').length).toBe(1)
+  await ui.unmount()
+})
+
+const PLAN_ROOT = '/home/k/proj'
+const PLANS = `${PLAN_ROOT}/docs/superpowers/plans`
+const AUTH_PLAN = `${PLANS}/2026-10-27-auth.md`
+const OLD_PLAN = `${PLANS}/2026-09-01-old.md`
+const BIG_PLAN = `${PLANS}/2026-10-27-big.md`
+const AUTH_MD = ['# Auth Refactor Implementation Plan', '', '### Task 1: Setup', '', '### Task 2: Datenmodell', '', '### Task 3: API-Endpoint', ''].join('\n')
+const OLD_MD = ['# Altplan', '', '## Task 1: Alt', '', '## Task 2: Auch alt', ''].join('\n')
+const BIG_MD = ['# Big', '', ...Array.from({ length: 35 }, (_, i) => `### Task ${i + 1}: Teil ${i + 1} Ende`)].join('\n')
+const INDEX_PLAN = `${PLANS}/README.md`
+const RUN_SKILL = 'superpowers:subagent-driven-development'
+
+function planWorld(on: any, ran: Ran, extra: { rootFiles?: [string, 'file' | 'dir'][] } = {}) {
+  let id = 0
+  planValue = undefined
+  on('state.set', (_$: any, e: any, next: any) => {
+    if (e.plugin === 'filetree' && e.key === 'plan') planValue = e.value
+    return next(e)
+  })
+  on('skill.prompt', (_$: any, e: any) => ({ text: e.text }))
+  return world(on, {
+    os: 'linux', env: { HOME: '/home/k' }, cwd: PLAN_ROOT, top: '', status: '', numstat: '',
+    dirs: {
+      [PLAN_ROOT]: [['docs', 'dir'], ...(extra.rootFiles ?? [])],
+      [`${PLAN_ROOT}/docs`]: [['superpowers', 'dir']],
+      [`${PLAN_ROOT}/docs/superpowers`]: [['plans', 'dir']],
+      [PLANS]: [['2026-09-01-old.md', 'file'], ['2026-10-27-auth.md', 'file'], ['2026-10-27-big.md', 'file']],
+    },
+    files: { [AUTH_PLAN]: AUTH_MD, [OLD_PLAN]: OLD_MD, [BIG_PLAN]: BIG_MD, [INDEX_PLAN]: '# Plans\n\nNothing to do here.\n' },
+    tool: (e: any) =>
+      e.tool === 'TaskCreate' ? { result: { task: { id: String(++id), subject: e.subject } } }
+      : e.tool === 'TaskUpdate' ? { result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }
+      : e.tool === 'Skill' ? { result: { success: true, commandName: e.skill } }
+      : { result: {} },
+  }, ran)
+}
+
+const COMPOSE = { model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as any
+// the test `$` has no `state` noun, so this keeps the last filetree/plan write; planWorld resets it (tests run serially)
+let planValue: Plan | undefined
+
+async function planOf(_$: any): Promise<Plan> {
+  return planValue as Plan
+}
+
+async function runPlan($: any, clock: any, path = AUTH_PLAN) {
+  await $.tool.call({ tool: 'Read', file_path: path })
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL })
+  await clock.settle()
+}
+
+test('plan progress: only an executing skill activates a plan, and the task list sets its statuses', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await $.tool.call({ tool: 'Read', file_path: AUTH_PLAN } as any)
+  await $.tool.call({ tool: 'Skill', skill: 'superpowers:writing-plans' } as any)
+  await clock.settle()
+  expect((await planOf($))?.path ?? '').toBe('')
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL } as any)
+  await clock.settle()
+  const plan = await planOf($)
+  expect([plan.path, plan.title, plan.tasks.map(t => t.id)]).toEqual([AUTH_PLAN, 'Auth Refactor', ['1', '2', '3']])
+  for (const subject of ['Task 1: Setup', 'Task 2: Datenmodell', 'Task 3: API-Endpoint', 'Final review']) await $.tool.call({ tool: 'TaskCreate', subject, description: '' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'in_progress' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '4', status: 'in_progress' } as any)
+  await clock.settle()
+  expect(statuses(await planOf($))).toEqual({ '1': 'completed', '2': 'in_progress', '3': 'pending' })
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'deleted' } as any)
+  await clock.settle()
+  expect(statuses(await planOf($))['2']).toBe('pending')
+})
+
+test('plan progress: a typed slash command of an executing skill activates the plan', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await $.tool.call({ tool: 'Read', file_path: AUTH_PLAN } as any)
+  const other = await $.skill.prompt({ skill: 'superpowers:writing-plans', text: 'write' })
+  await clock.settle()
+  expect((await planOf($))?.path ?? '').toBe('')
+  const result = await $.skill.prompt({ skill: 'superpowers:executing-plans', text: 'go' })
+  await clock.settle()
+  expect([other.text, result.text]).toEqual(['write', 'go'])
+  expect((await planOf($)).path).toBe(AUTH_PLAN)
+})
+
+test('plan progress: a plans-dir file without tasks keeps the pick for the real plan', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL } as any)
+  await $.tool.call({ tool: 'Read', file_path: INDEX_PLAN } as any)
+  await clock.settle()
+  expect((await planOf($))?.path ?? '').toBe('')
+  await $.tool.call({ tool: 'Read', file_path: AUTH_PLAN } as any)
+  await clock.settle()
+  expect((await planOf($)).path).toBe(AUTH_PLAN)
+})
+
+test('plan progress: tool calls of subagents change nothing', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await runPlan($, clock)
+  await $.tool.call({ tool: 'Read', file_path: OLD_PLAN, agentId: 'a1' } as any)
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL, agentId: 'a1' } as any)
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Task 1: Setup', description: '', agentId: 'a1' } as any)
+  await clock.settle()
+  const plan = await planOf($)
+  expect([plan.path, plan.candidate, plan.claude]).toEqual([AUTH_PLAN, AUTH_PLAN, {}])
+})
+
+test('plan progress: a newly run plan does not count the old plan tasks, and switching back restores them', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await runPlan($, clock)
+  await $.tool.call({ tool: 'Read', file_path: AUTH_PLAN } as any)
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Task 1: Setup', description: '' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' } as any)
+  await $.tool.call({ tool: 'Write', file_path: OLD_PLAN, content: OLD_MD } as any)
+  await clock.settle()
+  expect((await planOf($)).path).toBe(AUTH_PLAN)
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL } as any)
+  await clock.settle()
+  let plan = await planOf($)
+  expect([plan.path, plan.title, statuses(plan)]).toEqual([OLD_PLAN, 'Altplan', { '1': 'pending', '2': 'pending' }])
+  await $.tool.call({ tool: 'Read', file_path: AUTH_PLAN } as any)
+  await clock.settle()
+  plan = await planOf($)
+  expect([plan.path, statuses(plan)]).toEqual([AUTH_PLAN, { '1': 'completed', '2': 'pending', '3': 'pending' }])
+})
+
+test('plan progress: TodoWrite lists count like tasks', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await runPlan($, clock)
+  const todo = (content: string, status: string) => ({ content, status, activeForm: content })
+  await $.tool.call({ tool: 'TodoWrite', todos: [todo('Task 1: Setup', 'completed'), todo('Task 2: Datenmodell', 'in_progress'), todo('Final review', 'pending')] } as any)
+  await clock.settle()
+  expect(statuses(await planOf($))).toEqual({ '1': 'completed', '2': 'in_progress', '3': 'pending' })
+  await $.tool.call({ tool: 'TodoWrite', todos: [todo('Task 1: Setup', 'completed')] } as any)
+  await clock.settle()
+  expect(statuses(await planOf($))).toEqual({ '1': 'completed', '2': 'pending', '3': 'pending' })
+})
+
+test('plan progress: the system prompt asks for one task per plan task only while a plan runs', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' }] }))
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  expect((await $.prompt.compose(COMPOSE)).sections.map((s: any) => s.id)).toEqual(['intro'])
+  await runPlan($, clock)
+  const sections = (await $.prompt.compose(COMPOSE)).sections
+  expect(sections.map((s: any) => [s.id, s.scope])).toEqual([['intro', 'shared'], ['filetree:plan', 'session']])
+  expect(sections[1]?.text).toContain(AUTH_PLAN)
+  expect(sections[1]?.text).toContain('`Task <id>: <title>`')
+})
+
+const MANY_FILES = Array.from({ length: 60 }, (_, i) => [`f${String(i).padStart(2, '0')}.ts`, 'file'] as [string, 'file'])
+
+async function fileRows(ui: any): Promise<number> {
+  return new Set(JSON.stringify(await ui.drawn({ in: 'rows' })).match(/f\d\d\.ts/g) ?? []).size
+}
+
+test('plan progress: the pane draws the plan below the tree and gives up tree rows for it', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [], { rootFiles: MANY_FILES })
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await $.tool.call({ tool: 'Read', file_path: AUTH_PLAN } as any)
+  await clock.settle()
+  await clock.advance(5_000)
+  await clock.settle()
+  expect(await texts(ui)).not.toMatch(/Plan \d+\/\d+/)
+  const before = await fileRows(ui)
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL } as any)
+  for (const subject of ['Task 1: Setup', 'Task 2: Datenmodell', 'Task 3: API-Endpoint']) await $.tool.call({ tool: 'TaskCreate', subject, description: '' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'in_progress' } as any)
+  await clock.settle()
+  const shown = await texts(ui)
+  for (const text of ['── ', 'Plan 1/3', ' · Auth Refactor ', '✓ ', '▶ ', '○ ', 'Setup', 'Datenmodell', 'API-Endpoint']) expect(shown).toContain(text)
+  expect(await fileRows(ui)).toBe(before - 4)
+  await ui.unmount()
+})
+
+test('plan progress: a short pane leaves the plan out and keeps five tree rows', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [], { rootFiles: MANY_FILES })
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await runPlan($, clock, BIG_PLAN)
+  const seen: [number, boolean, boolean, boolean][] = []
+  for (const bodyRows of [10, 14, 15, 30]) {
+    const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: { ...paneProps(60), scroll: { offset: 0, bodyRows } } })
+    await clock.settle()
+    await clock.advance(5_000)
+    await clock.settle()
+    const shown = await texts(ui)
+    seen.push([bodyRows, /Plan \d+\/\d+/.test(shown), shown.includes('Teil 3 Ende'), (((await ui.drawn({ in: 'rows' })) as any).children?.length ?? 0) >= 5])
+    await ui.unmount()
+  }
+  expect(seen).toEqual([[10, false, false, true], [14, false, false, true], [15, true, false, true], [30, true, true, true]])
+})
+
+test('plan progress: a long plan shows a window around the current task with summary rows', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await runPlan($, clock, BIG_PLAN)
+  for (let i = 1; i <= 35; i++) await $.tool.call({ tool: 'TaskCreate', subject: `Task ${i}: Teil ${i} Ende`, description: '' } as any)
+  for (let i = 1; i <= 20; i++) await $.tool.call({ tool: 'TaskUpdate', taskId: String(i), status: 'completed' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '21', status: 'in_progress' } as any)
+  await clock.settle()
+  const shown = await texts(ui)
+  for (const text of ['Plan 20/35', ' · Big ', '✓ 19 erledigt', 'Teil 20 Ende', 'Teil 21 Ende', 'Teil 29 Ende', '○ 6 weitere']) expect(shown).toContain(text)
+  for (const text of ['Teil 19 Ende', 'Teil 30 Ende']) expect(shown).not.toContain(text)
+  await ui.unmount()
+})
+
+test('plan progress: the desktop pane lists every task of a long plan', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'desktop', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'desktop', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await runPlan($, clock, BIG_PLAN)
+  await clock.settle()
+  const shown = await texts(ui)
+  for (const text of ['Plan 0/35', 'Teil 1 Ende', 'Teil 35 Ende']) expect(shown).toContain(text)
+  expect(shown).not.toContain('weitere')
   await ui.unmount()
 })

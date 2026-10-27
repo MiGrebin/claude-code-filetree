@@ -65,12 +65,35 @@ export type Theme = {
   bg: string
 }
 
+export type PlanStatus = 'pending' | 'in_progress' | 'completed'
+
+export type PlanTask = {
+  id: string
+  title: string
+}
+
+export type ClaudeTask = {
+  subject: string
+  status: PlanStatus
+  plan: string
+}
+
+export type Plan = {
+  candidate: string
+  pick: boolean
+  path: string
+  title: string
+  tasks: PlanTask[]
+  claude: Record<string, ClaudeTask>
+}
+
 declare module 'claude-code' {
   interface PluginState {
     filetree: {
       tree: FileTree
       theme: Theme
       activity: Activity[]
+      plan: Plan
     }
   }
 }
