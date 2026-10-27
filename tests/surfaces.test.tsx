@@ -2705,3 +2705,63 @@ test('plan progress: the system prompt asks for one task per plan task only whil
   expect(sections[1]?.text).toContain(AUTH_PLAN)
   expect(sections[1]?.text).toContain('`Task <id>: <title>`')
 })
+
+const MANY_FILES = Array.from({ length: 60 }, (_, i) => [`f${String(i).padStart(2, '0')}.ts`, 'file'] as [string, 'file'])
+
+async function fileRows(ui: any): Promise<number> {
+  return new Set(JSON.stringify(await ui.drawn({ in: 'rows' })).match(/f\d\d\.ts/g) ?? []).size
+}
+
+test('plan progress: the pane draws the plan below the tree and gives up tree rows for it', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [], { rootFiles: MANY_FILES })
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await $.tool.call({ tool: 'Read', file_path: AUTH_PLAN } as any)
+  await clock.settle()
+  await clock.advance(5_000)
+  await clock.settle()
+  expect(await texts(ui)).not.toMatch(/Plan \d+\/\d+/)
+  const before = await fileRows(ui)
+  await $.tool.call({ tool: 'Skill', skill: RUN_SKILL } as any)
+  for (const subject of ['Task 1: Setup', 'Task 2: Datenmodell', 'Task 3: API-Endpoint']) await $.tool.call({ tool: 'TaskCreate', subject, description: '' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'in_progress' } as any)
+  await clock.settle()
+  const shown = await texts(ui)
+  for (const text of ['── ', 'Plan 1/3', ' · Auth Refactor ', '✓ ', '▶ ', '○ ', 'Setup', 'Datenmodell', 'API-Endpoint']) expect(shown).toContain(text)
+  expect(await fileRows(ui)).toBe(before - 4)
+  await ui.unmount()
+})
+
+test('plan progress: a long plan shows a window around the current task with summary rows', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await runPlan($, clock, BIG_PLAN)
+  for (let i = 1; i <= 35; i++) await $.tool.call({ tool: 'TaskCreate', subject: `Task ${i}: Teil ${i} Ende`, description: '' } as any)
+  for (let i = 1; i <= 20; i++) await $.tool.call({ tool: 'TaskUpdate', taskId: String(i), status: 'completed' } as any)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '21', status: 'in_progress' } as any)
+  await clock.settle()
+  const shown = await texts(ui)
+  for (const text of ['Plan 20/35', ' · Big ', '✓ 19 erledigt', 'Teil 20 Ende', 'Teil 21 Ende', 'Teil 29 Ende', '○ 6 weitere']) expect(shown).toContain(text)
+  for (const text of ['Teil 19 Ende', 'Teil 30 Ende']) expect(shown).not.toContain(text)
+  await ui.unmount()
+})
+
+test('plan progress: the desktop pane lists every task of a long plan', { timeoutMs: 20_000 }, async ($, on) => {
+  const clock = planWorld(on, [])
+  await $.session.start({ cwd: PLAN_ROOT, surface: 'desktop', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filetree', surface: 'desktop', component: 'Pane', requestId: 'filetree', props: paneProps(60) })
+  await clock.settle()
+  await runPlan($, clock, BIG_PLAN)
+  await clock.settle()
+  const shown = await texts(ui)
+  for (const text of ['Plan 0/35', 'Teil 1 Ende', 'Teil 35 Ende']) expect(shown).toContain(text)
+  expect(shown).not.toContain('weitere')
+  await ui.unmount()
+})

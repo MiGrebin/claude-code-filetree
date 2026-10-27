@@ -13,7 +13,8 @@ import { boxLook, fitPixels, inkOn, over, paint, type PixelLook, png, readable, 
 import { CELL_PROBE, colorOf, GHOSTTY_ARGS, parseGhostty, type TermColors } from './term'
 import type { ZoneProps } from './zone'
 import { ADD_COLOR, DEL_COLOR, type Palette, parsePalette } from './palette'
-import { trackPlan } from './progress'
+import { doneCount, PLAN_GLYPH, planHeading, planWindow, statuses, summaryLabel } from './plan'
+import { readPlan, trackPlan } from './progress'
 import { CHEVRON_CLOSED, CHEVRON_OPEN, fileIcon, GIT_COLOR } from './icons'
 import {
   age,
@@ -2191,13 +2192,17 @@ export const register: Register = (on, options) => {
     const width = Math.max(24, e.props.bodyColumns)
     const rows = visibleRows(t)
     const body = e.props.scroll?.bodyRows ?? 40
+    const plan = await readPlan($)
+    const planStatus = statuses(plan)
+    const planLines = plan.path ? planWindow(plan.tasks, planStatus, nativeScroll ? plan.tasks.length : Math.max(3, Math.floor(body / 3) - 1)) : []
+    const planRows = planLines.length ? planLines.length + 1 : 0
     const footer = t.nodes.find(n => n.id === t.cursor)?.id ?? (t.selected || '')
-    const chrome = 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
+    const chrome = planRows + 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
     const spare = body - chrome - 5
     const splitRows = t.split && !nativeScroll && spare >= 6 && (treemapSetting !== 'off' || Boolean(peekTarget(t))) ? Math.min(Math.max(6, Math.floor(body * 0.45)), spare) : 0
     splitShown = splitRows > 0
     if (!splitShown) overPeek = false
-    const fixed = splitRows + 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
+    const fixed = planRows + splitRows + 1 + (searchGap ? 2 : 0) + 1 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (footer || latest || shortcutsShown || shortcutsSetting === 'auto' ? 1 : 0)
     const room = nativeScroll ? Math.max(1, rows.length) : Math.max(5, (e.props.scroll?.bodyRows ?? 40) - fixed)
     const isLit = (id: string) => bright.has(id) || dimmed.has(id)
     const focus = followClaude && t.flashOn ? ([...t.flash].reverse().find(id => id !== BRANCH_ROW) ?? t.cursor) : t.cursor
@@ -2600,6 +2605,40 @@ export const register: Register = (on, options) => {
       }
     }
     const keys = allKeys.filter(k => picked.has(k.key))
+    const planSection = () => {
+      const heading = planHeading(doneCount(plan.tasks, planStatus), plan.tasks.length, plan.title, width)
+      const idWidth = Math.max(...plan.tasks.map(x => x.id.length))
+      const strong = { bold: true, color: theme.accent }
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row" height={1} overflow="hidden">
+            <Text {...mutedText}>{'── '}</Text>
+            <Text bold color={theme.accent}>{heading.label}</Text>
+            <Text {...mutedText}>{heading.rest}</Text>
+          </Box>
+          {planLines.map(line =>
+            line.kind === 'task' ? (
+              <Box flexDirection="row" height={1} overflow="hidden">
+                <Text {...(line.status === 'completed' ? { color: addColor } : line.status === 'in_progress' ? strong : mutedText)}>{`${PLAN_GLYPH[line.status]} `}</Text>
+                <Box flexShrink={0}>
+                  <Text {...(line.status === 'in_progress' ? strong : mutedText)}>{`${line.task.id.padStart(idWidth)}  `}</Text>
+                </Box>
+                <Box flexShrink={1} overflow="hidden">
+                  <Text {...(line.status === 'in_progress' ? strong : mutedText)} wrap="truncate-end">
+                    {line.task.title}
+                  </Text>
+                </Box>
+              </Box>
+            ) : (
+              <Text {...mutedText} wrap="truncate-end">
+                {summaryLabel(line)}
+              </Text>
+            ),
+          )}
+        </Box>
+      )
+    }
+
     const hidden: [string, () => void][] = [
       ...(['j', 'k', 'h', 'l'] as const).map(k => [k, () => void navigate($, k).then(park)] as [string, () => void]),
       ...allKeys.filter(k => k.key.length === 1 && k.key !== '?' && !picked.has(k.key)).map(k => [k.key, k.act] as [string, () => void]),
@@ -2674,6 +2713,7 @@ export const register: Register = (on, options) => {
             ) : null}
           </Box>
         )}
+        {planRows ? planSection() : null}
         <Box key="hotkeys" height={0} overflow="hidden" flexDirection="row">
           {shortcutsSetting === 'always' ? null : <Button key="hk-tree" plain autoFocus label="o" onPress={() => void navigate($, 'return')} />}
           {hidden.map(([k, act]) => <Button key={`hk-${k}`} plain hotkey={k} label={k} onPress={act} />)}
